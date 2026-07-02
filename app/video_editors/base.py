@@ -22,6 +22,7 @@ class VideoEditRequest:
     bgm_path: Path | None = None
     bgm_volume: float = 0.2
     voice_volume: float = 1.0
+    subtitles_path: Path | None = None
 
 
 @dataclass(frozen=True)

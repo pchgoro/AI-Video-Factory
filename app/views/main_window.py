@@ -721,6 +721,7 @@ class MainWindow(QMainWindow):
             bool(progress.get("台本")),
             bool(progress.get("画像")),
             bool(progress.get("音声")),
+            bool(progress.get("字幕")),
             bool(progress.get("動画")),
             bool(progress.get("投稿")),
         ]
@@ -885,7 +886,7 @@ class MainWindow(QMainWindow):
         title = project.title or project.topic or project.name
         tags = f" #{' #'.join(project.tags[:3])}" if project.tags else ""
         series = f"{project.series}{project.series_number:03d}" if project.series else project.name
-        return f"{title}  [{done_count}/5]\n{series} / {project.genre}{tags}"
+        return f"{title}  [{done_count}/{len(PROGRESS_ITEMS)}]\n{series} / {project.genre}{tags}"
 
     def _read_text(self, path: Path) -> str:
         try:

@@ -21,7 +21,7 @@ def build_chatgpt_prompt(
         "script": "",
         "voice_text": "",
         "image_prompts": ["" for _ in range(image_count)],
-        "subtitles": [{"text": "", "start": "", "end": ""}],
+        "subtitles": [{"start": 0.0, "end": 2.8, "text": ""}],
         "hashtags": [""],
     }
 
@@ -55,6 +55,8 @@ def build_chatgpt_prompt(
 - Markdownのコードブロックも使わない
 - 必ず次のキーを持つJSONだけを返す
 - subtitles は start / end / text を持つ配列にする
+- subtitles の start と end は秒数の数値にする
+- 1字幕は1〜2行程度、表示時間は約2〜4秒、スマホ縦動画で読みやすい短い文にする
 - hashtags は文字列配列にする
 
 【JSON形式】

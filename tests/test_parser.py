@@ -14,7 +14,7 @@ def test_parse_valid_json() -> None:
             "script": "台本",
             "voice_text": "音声",
             "image_prompts": ["image 1", "image 2", "image 3"],
-            "subtitles": [{"text": "字幕", "start": "0:00", "end": "0:01"}],
+            "subtitles": [{"start": 0.0, "end": 2.8, "text": "字幕"}],
             "hashtags": ["#AI", "#Shorts"],
         },
         ensure_ascii=False,
@@ -24,6 +24,7 @@ def test_parse_valid_json() -> None:
     assert parsed.script == "台本"
     assert parsed.voice_text == "音声"
     assert len(parsed.image_prompts) == 3
+    assert '"start": 0.0' in parsed.subtitles
     assert "#AI" in parsed.hashtags
 
 

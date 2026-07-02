@@ -48,7 +48,12 @@ class FFmpegEditor(VideoEditor):
             filter_parts.append(self._image_filter(index, label, request, frames_per_image))
 
         concat_inputs = "".join(video_labels)
-        filter_parts.append(f"{concat_inputs}concat=n={len(images)}:v=1:a=0,format=yuv420p[vout]")
+        if request.subtitles_path and request.subtitles_path.exists():
+            subtitles_filter = self._subtitles_filter(request.subtitles_path)
+            filter_parts.append(f"{concat_inputs}concat=n={len(images)}:v=1:a=0,format=yuv420p[vbase]")
+            filter_parts.append(f"[vbase]{subtitles_filter},format=yuv420p[vout]")
+        else:
+            filter_parts.append(f"{concat_inputs}concat=n={len(images)}:v=1:a=0,format=yuv420p[vout]")
 
         command = [self.ffmpeg_path, "-y", "-nostdin", *input_args]
         voice_input_index: int | None = None
@@ -82,6 +87,12 @@ class FFmpegEditor(VideoEditor):
         if completed.returncode != 0:
             detail = completed.stderr.strip() or completed.stdout.strip()
             self.logger.error("FFmpeg生成失敗: %s", detail)
+            if request.subtitles_path and "subtitles" in detail.lower():
+                return VideoEditResult(
+                    False,
+                    "FFmpegで字幕焼き込みに失敗しました。フォントが見つからない可能性があります。\n" + detail,
+                    command=command,
+                )
             return VideoEditResult(False, f"FFmpegで動画生成に失敗しました。\n{detail}", command=command)
 
         self.logger.info("FFmpeg: %s を生成", request.output_path)
@@ -167,3 +178,8 @@ class FFmpegEditor(VideoEditor):
         if voice_input_index is not None:
             return "[voice]"
         return "[bgm]"
+
+    def _subtitles_filter(self, subtitles_path: Path) -> str:
+        escaped = subtitles_path.resolve().as_posix().replace(":", r"\:")
+        escaped = escaped.replace("'", r"\'")
+        return f"subtitles='{escaped}'"

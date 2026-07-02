@@ -175,6 +175,7 @@ class ProjectService:
             "台本": bool(self._read_text(path / "script.txt").strip()),
             "画像": self.generated_image_count(path / "images", expected_images) >= expected_images,
             "音声": (path / "audio" / "voice.wav").exists(),
+            "字幕": (path / "video" / "subtitles.ass").exists(),
             "動画": (path / "video" / "final.mp4").exists(),
             "投稿": (path / "posted.txt").exists(),
         }
@@ -195,6 +196,10 @@ class ProjectService:
         for index, _prompt, generated in self.image_prompt_items(project):
             items.append((f"画像{index}", "生成済" if generated else "未生成", project.path / "images"))
         items.append(("音声", "生成済" if (project.path / "audio" / "voice.wav").exists() else "未生成", project.path / "audio"))
+        subtitle_status = "生成済" if (project.path / "video" / "subtitles.ass").exists() else "未生成"
+        if (project.path / "video" / "final.mp4").exists() and (project.path / "video" / "subtitles.ass").exists():
+            subtitle_status = "焼き込み済み"
+        items.append(("字幕", subtitle_status, project.path / "video"))
         items.append(("動画", "生成済" if (project.path / "video" / "final.mp4").exists() else "未生成", project.path / "video"))
         return items
 

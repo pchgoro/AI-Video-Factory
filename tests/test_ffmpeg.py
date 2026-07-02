@@ -111,3 +111,43 @@ def test_ffmpeg_command_mixes_looped_bgm_with_fades(tmp_path, monkeypatch) -> No
     assert "afade=t=out:st=3.000:d=1.0" in filter_complex
     assert "atrim=duration=4.000" in filter_complex
     assert "amix=inputs=2:duration=first" in filter_complex
+
+
+def test_ffmpeg_command_burns_ass_subtitles(tmp_path, monkeypatch) -> None:
+    from video_editors.ffmpeg_editor import FFmpegEditor
+
+    project_dir = tmp_path / "project"
+    images_dir = project_dir / "images"
+    audio_dir = project_dir / "audio"
+    video_dir = project_dir / "video"
+    subtitles_path = video_dir / "subtitles.ass"
+    images_dir.mkdir(parents=True)
+    audio_dir.mkdir(parents=True)
+    video_dir.mkdir(parents=True)
+    (images_dir / "001.png").write_bytes(b"image")
+    subtitles_path.write_text("[Script Info]\n", encoding="utf-8")
+
+    captured: dict[str, list[str]] = {}
+    monkeypatch.setattr("video_editors.ffmpeg_editor.shutil.which", lambda _path: "ffmpeg")
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("video_editors.ffmpeg_editor.subprocess.run", fake_run)
+    result = FFmpegEditor("ffmpeg").render(
+        VideoEditRequest(
+            project_dir=project_dir,
+            images_dir=images_dir,
+            audio_dir=audio_dir,
+            video_dir=video_dir,
+            output_path=video_dir / "final.mp4",
+            subtitles_path=subtitles_path,
+        )
+    )
+
+    filter_complex = captured["command"][captured["command"].index("-filter_complex") + 1]
+    assert result.success
+    assert "subtitles='" in filter_complex
+    assert "subtitles.ass" in filter_complex
+    assert "[vbase]" in filter_complex

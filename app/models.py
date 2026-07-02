@@ -7,8 +7,8 @@ from pathlib import Path
 DEFAULT_DURATIONS = ["30秒", "90秒", "3分"]
 DEFAULT_GENRES = ["宇宙", "株", "AIニュース", "歴史", "猫", "偉人"]
 DEFAULT_TOPICS = ["ブラックホール", "ホワイトホール", "ダークマター", "量子もつれ", "AIエージェント", "半導体", "保護猫"]
-PROGRESS_ITEMS = ["台本", "画像", "音声", "動画", "投稿"]
-WIZARD_STEPS = ["テーマ入力", "ChatGPT", "回答解析", "画像", "音声", "動画", "投稿"]
+PROGRESS_ITEMS = ["台本", "画像", "音声", "字幕", "動画", "投稿"]
+WIZARD_STEPS = ["テーマ入力", "ChatGPT", "回答解析", "画像", "音声", "字幕", "動画", "投稿"]
 
 
 @dataclass
@@ -27,6 +27,11 @@ class AppSettings:
     zoom_enabled: bool = True
     bgm_enabled: bool = True
     bgm_volume_percent: int = 20
+    subtitles_enabled: bool = True
+    subtitle_font_size: int = 64
+    subtitle_position: str = "下"
+    subtitle_outline: int = 4
+    subtitle_shadow_enabled: bool = True
 
 
 @dataclass

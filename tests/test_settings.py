@@ -14,9 +14,19 @@ def test_settings_roundtrip(tmp_path) -> None:
     settings.ffmpeg_path = "ffmpeg"
     settings.bgm_enabled = True
     settings.bgm_volume_percent = 35
+    settings.subtitles_enabled = False
+    settings.subtitle_font_size = 72
+    settings.subtitle_position = "中央"
+    settings.subtitle_outline = 6
+    settings.subtitle_shadow_enabled = False
     service.save(settings)
     loaded = service.load()
     assert loaded.voicevox_speaker_id == 3
     assert loaded.ffmpeg_path == "ffmpeg"
     assert loaded.bgm_enabled is True
     assert loaded.bgm_volume_percent == 35
+    assert loaded.subtitles_enabled is False
+    assert loaded.subtitle_font_size == 72
+    assert loaded.subtitle_position == "中央"
+    assert loaded.subtitle_outline == 6
+    assert loaded.subtitle_shadow_enabled is False

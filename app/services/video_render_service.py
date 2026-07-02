@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from models import AppSettings, ProjectInfo
+from services.subtitle_service import SubtitleError, SubtitleService
 from video_editors.base import VideoEditRequest, VideoEditResult, VideoEditor
 
 
@@ -12,9 +13,16 @@ class VideoRenderService:
     def __init__(self, editor: VideoEditor, settings: AppSettings) -> None:
         self.editor = editor
         self.settings = settings
+        self.subtitle_service = SubtitleService()
 
     def render_project(self, project: ProjectInfo) -> VideoEditResult:
         bgm_path = self._find_bgm_file(self._bgm_dir_for_project(project.path))
+        subtitles_path = None
+        if self.settings.subtitles_enabled:
+            try:
+                subtitles_path = self.subtitle_service.generate_for_project(project.path, self.settings)
+            except SubtitleError as exc:
+                return VideoEditResult(False, str(exc))
         request = VideoEditRequest(
             project_dir=project.path,
             images_dir=project.path / "images",
@@ -27,6 +35,7 @@ class VideoRenderService:
             zoom_enabled=self.settings.zoom_enabled,
             bgm_path=bgm_path,
             bgm_volume=max(0.0, min(1.0, self.settings.bgm_volume_percent / 100)),
+            subtitles_path=subtitles_path,
         )
         return self.editor.render(request)
 

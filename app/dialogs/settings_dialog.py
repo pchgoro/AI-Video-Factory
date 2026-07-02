@@ -99,6 +99,29 @@ class SettingsDialog(QDialog):
         self.bgm_volume_box.setSuffix("%")
         form.addRow("BGM音量", self.bgm_volume_box)
 
+        self.subtitles_enabled_check = QCheckBox("字幕を使用する")
+        self.subtitles_enabled_check.setChecked(settings.subtitles_enabled)
+        form.addRow("字幕", self.subtitles_enabled_check)
+
+        self.subtitle_font_size_box = QSpinBox()
+        self.subtitle_font_size_box.setRange(24, 160)
+        self.subtitle_font_size_box.setValue(settings.subtitle_font_size)
+        form.addRow("字幕フォントサイズ", self.subtitle_font_size_box)
+
+        self.subtitle_position_box = QComboBox()
+        self.subtitle_position_box.addItems(["下", "中央", "上"])
+        self.subtitle_position_box.setCurrentText(settings.subtitle_position)
+        form.addRow("字幕位置", self.subtitle_position_box)
+
+        self.subtitle_outline_box = QSpinBox()
+        self.subtitle_outline_box.setRange(0, 16)
+        self.subtitle_outline_box.setValue(settings.subtitle_outline)
+        form.addRow("字幕アウトライン太さ", self.subtitle_outline_box)
+
+        self.subtitle_shadow_check = QCheckBox("字幕影を使う")
+        self.subtitle_shadow_check.setChecked(settings.subtitle_shadow_enabled)
+        form.addRow("字幕影", self.subtitle_shadow_check)
+
         layout.addLayout(form)
 
         bgm_folder_button = QPushButton("BGMフォルダを開く")
@@ -142,6 +165,11 @@ class SettingsDialog(QDialog):
             zoom_enabled=self.zoom_check.isChecked(),
             bgm_enabled=self.bgm_enabled_check.isChecked(),
             bgm_volume_percent=self.bgm_volume_box.value(),
+            subtitles_enabled=self.subtitles_enabled_check.isChecked(),
+            subtitle_font_size=self.subtitle_font_size_box.value(),
+            subtitle_position=self.subtitle_position_box.currentText(),
+            subtitle_outline=self.subtitle_outline_box.value(),
+            subtitle_shadow_enabled=self.subtitle_shadow_check.isChecked(),
         )
 
     def _select_save_dir(self) -> None:

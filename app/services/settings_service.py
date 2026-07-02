@@ -37,6 +37,11 @@ class SettingsService:
             zoom_enabled=bool(data.get("zoom_enabled", True)),
             bgm_enabled=bool(data.get("bgm_enabled", True)),
             bgm_volume_percent=int(data.get("bgm_volume_percent", 20)),
+            subtitles_enabled=bool(data.get("subtitles_enabled", True)),
+            subtitle_font_size=int(data.get("subtitle_font_size", 64)),
+            subtitle_position=data.get("subtitle_position", "下"),
+            subtitle_outline=int(data.get("subtitle_outline", 4)),
+            subtitle_shadow_enabled=bool(data.get("subtitle_shadow_enabled", True)),
         )
 
     def save(self, settings: AppSettings) -> None:

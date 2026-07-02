@@ -2,10 +2,10 @@
 
 AI Video Factory は、ショート動画制作をローカルPCで整理・半自動化するWindows用デスクトップアプリです。
 
-Version: `0.4.6`  
-Phase: `Phase4.6`
+Version: `0.5.0`  
+Phase: `Phase5`
 
-Phase4.6では、動画生成時にBGMを1曲だけ自動で追加できるようにしました。
+Phase5では、ChatGPT JSONの時間付き字幕からASS字幕を生成し、FFmpegで動画へ焼き込めるようにしました。
 
 ## 環境構築
 
@@ -125,6 +125,7 @@ ffmpeg -version
 - `images/001.png` などの画像
 - `audio/voice.wav`
 - `assets/bgm` 内のBGM（任意）
+- `subtitles.txt` の時間付き字幕（任意）
 
 出力:
 
@@ -148,11 +149,46 @@ BGMが無い場合は、従来通りナレーションのみで動画を生成�
 
 設定画面では「BGMを使用する」と「BGM音量」を変更できます。「BGMフォルダを開く」から `assets/bgm` を直接開けます。
 
+## 字幕焼き込み
+
+ChatGPT JSONの `subtitles` に時間付き字幕が含まれている場合、動画生成時に `video/subtitles.ass` を作成し、FFmpegで `video/final.mp4` に焼き込みます。
+
+字幕形式:
+
+```json
+"subtitles": [
+  {
+    "start": 0.0,
+    "end": 2.8,
+    "text": "ブラックホールは宇宙で最も謎の天体です"
+  }
+]
+```
+
+ルール:
+
+- `start` と `end` は秒数の数値
+- 1字幕は1〜2行程度
+- 1字幕の表示時間は約2〜4秒
+- スマホ縦動画で読みやすい短い文章
+- JSON以外の説明文やMarkdownコードブロックは不要
+
+字幕設定:
+
+- 字幕を使用する: ON/OFF
+- 字幕フォントサイズ: デフォルト64
+- 字幕位置: 下 / 中央 / 上
+- 字幕アウトライン太さ: デフォルト4
+- 字幕影: ON/OFF
+
+字幕が無い場合は、従来通り字幕なしで動画を生成します。壊れた字幕データがある場合は、日本語のエラーメッセージを表示して動画生成を止めます。
+
 ## 進捗判定
 
 - 台本: `script.txt` に内容がある
 - 画像: 画像枚数分の `001.png` / `001.jpg` / `001.webp` がある
 - 音声: `audio/voice.wav` がある
+- 字幕: `video/subtitles.ass` がある
 - 動画: `video/final.mp4` がある
 - 投稿: `posted.txt` がある
 
@@ -191,6 +227,14 @@ FFmpegをインストールし、PATHを通してください。PATHを通さな
 
 `assets/bgm` に `mp3` または `wav` が入っているか確認してください。設定画面で「BGMを使用する」がONになっているかも確認してください。
 
+### 字幕が表示されません
+
+`subtitles.txt` に `start` / `end` / `text` を持つJSON配列が保存されているか確認してください。動画生成後に `video/subtitles.ass` が作成されているか、設定画面で「字幕を使用する」がONになっているかも確認してください。
+
+### 字幕焼き込みに失敗します
+
+FFmpegの字幕フィルターで失敗している可能性があります。`subtitles.ass` の形式、FFmpegの導入状況、フォントが見つからない可能性を確認してください。Windows標準の `Yu Gothic` を優先して使用します。
+
 ### 画像が1枚もありません
 
 プロジェクトの `images` フォルダに `001.png` などの画像を入れてください。
@@ -219,6 +263,7 @@ FFmpegをインストールし、PATHを通してください。PATHを通さな
 
 ## アップデート履歴
 
+- 0.5.0 Phase5: ASS字幕生成、FFmpeg字幕焼き込み、字幕設定、ChatGPT JSON字幕形式改善
 - 0.4.6 Phase4.6: BGM自動追加、BGM音量設定、BGMフェードイン/フェードアウト
 - 0.4.5 Phase4.5: 品質改善、ログ、サンプル、環境チェック、pytest追加
 - 0.4.0 Phase4: JSON解析、VOICEVOX、FFmpeg、動画プレビュー
@@ -235,4 +280,4 @@ FFmpegをインストールし、PATHを通してください。PATHを通さな
 - 投稿履歴管理
 - 自動投稿
 
-Phase4.6では、画像生成API、OpenAI API、Claude API、Gemini API、自動投稿、字幕焼き込み、複数BGM、ジャンル別BGM、効果音は行っていません。
+Phase5では、画像生成API、OpenAI API、Claude API、Gemini API、自動投稿、自動字幕生成AI、Whisper連携、字幕アニメーション、複数BGM、ジャンル別BGM、効果音は行っていません。

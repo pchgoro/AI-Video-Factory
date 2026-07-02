@@ -112,12 +112,14 @@ class ChatGptAnswerParser:
         for item in value:
             if isinstance(item, dict):
                 text = str(item.get("text", "")).strip()
-                start = str(item.get("start", "")).strip()
-                end = str(item.get("end", "")).strip()
-                if start or end:
-                    lines.append(f"{start} --> {end} {text}".strip())
-                elif text:
-                    lines.append(text)
+                if not text:
+                    continue
+                try:
+                    start = float(item["start"])
+                    end = float(item["end"])
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ChatGptParseError("subtitles の start / end は秒数の数値で返してください。") from exc
+                lines.append({"start": start, "end": end, "text": text})
             elif str(item).strip():
-                lines.append(str(item).strip())
-        return "\n".join(lines)
+                raise ChatGptParseError("subtitles は start / end / text を持つオブジェクト配列で返してください。")
+        return json.dumps(lines, ensure_ascii=False, indent=2)
