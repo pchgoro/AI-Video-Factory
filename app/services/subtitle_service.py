@@ -46,17 +46,20 @@ class SubtitleService:
         if not value:
             return []
 
+        cues = []
         if value.startswith("["):
             try:
                 data = json.loads(value)
             except json.JSONDecodeError as exc:
                 raise SubtitleError(f"字幕JSONの形式が正しくありません。\n詳細: {exc.msg}") from exc
-            return self._parse_json_list(data)
+            cues = self._parse_json_list(data)
+        else:
+            cues = self._parse_arrow_lines(value)
 
-        cues = self._parse_arrow_lines(value)
-        if cues:
-            return cues
-        raise SubtitleError("字幕JSONの形式が正しくありません。start / end / text を持つ配列にしてください。")
+        if not cues:
+            raise SubtitleError("字幕JSONの形式が正しくありません。start / end / text を持つ配列にしてください。")
+
+        return self._split_long_cues(cues)
 
     def build_ass(self, cues: list[SubtitleCue], settings: AppSettings) -> str:
         alignment, margin_v = self._alignment_and_margin(settings.subtitle_position)
@@ -149,12 +152,146 @@ class SubtitleService:
         return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
     def _ass_text(self, text: str) -> str:
-        clean = text.replace("\r\n", "\n").replace("\r", "\n")
+        wrapped = self._auto_wrap_text(text)
+        clean = wrapped.replace("\r\n", "\n").replace("\r", "\n")
         clean = clean.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}")
         lines = [line.strip() for line in clean.splitlines() if line.strip()]
         if not lines:
             return ""
         return r"\N".join(lines[:2])
+
+    def _auto_wrap_text(self, text: str) -> str:
+        if len(text) <= 15 or "\n" in text or "\\n" in text or "\\N" in text:
+            return text
+
+        # Find punctuation marks that can serve as break points
+        break_chars = ["、", "，", " ", "　", ",", "."]
+        middle = len(text) // 2
+        best_idx = -1
+        min_diff = len(text)
+
+        for i, char in enumerate(text):
+            if char in break_chars:
+                diff = abs(i - middle)
+                if diff < min_diff:
+                    min_diff = diff
+                    best_idx = i
+
+        if best_idx != -1:
+            first = text[:best_idx + 1]
+            second = text[best_idx + 1:]
+            if first.strip() and second.strip():
+                return f"{first.strip()}\n{second.strip()}"
+
+        # If no punctuation, split at the halfway mark
+        first = text[:middle]
+        second = text[middle:]
+        return f"{first}\n{second}"
+
+    def _split_long_cues(self, cues: list[SubtitleCue]) -> list[SubtitleCue]:
+        result: list[SubtitleCue] = []
+        for cue in cues:
+            text = cue.text.strip()
+            if len(text) <= 28:
+                result.append(cue)
+                continue
+
+            split_texts = self._split_text_into_segments(text, max_len=25)
+            if len(split_texts) <= 1:
+                result.append(cue)
+                continue
+
+            # Distribute time proportionally
+            total_chars = sum(len(t) for t in split_texts)
+            if total_chars == 0:
+                result.append(cue)
+                continue
+
+            duration = cue.end - cue.start
+            current_start = cue.start
+            for t in split_texts:
+                char_len = len(t)
+                part_duration = duration * (char_len / total_chars)
+                part_end = current_start + part_duration
+                result.append(SubtitleCue(start=round(current_start, 2), end=round(part_end, 2), text=t))
+                current_start = part_end
+
+        return result
+
+    def _split_text_into_segments(self, text: str, max_len: int = 25) -> list[str]:
+        if len(text) <= max_len:
+            return [text]
+
+        # Split by sentence endings first (。！？\n)
+        sentences = re.split(r"([。！？\n])", text)
+        parts = []
+        current = ""
+        for s in sentences:
+            if not s:
+                continue
+            if s in "。！？\n":
+                current += s
+                parts.append(current)
+                current = ""
+            else:
+                if current:
+                    parts.append(current)
+                    current = ""
+                current = s
+        if current:
+            parts.append(current)
+
+        # Split long parts by reading punctuation (、，)
+        final_parts = []
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            if len(part) <= max_len:
+                final_parts.append(part)
+            else:
+                clauses = re.split(r"([、，])", part)
+                sub_current = ""
+                sub_parts = []
+                for c in clauses:
+                    if not c:
+                        continue
+                    if c in "、，":
+                        sub_current += c
+                        sub_parts.append(sub_current)
+                        sub_current = ""
+                    else:
+                        if sub_current:
+                            sub_parts.append(sub_current)
+                            sub_current = ""
+                        sub_current = c
+                if sub_current:
+                    sub_parts.append(sub_current)
+
+                temp = ""
+                for sp in sub_parts:
+                    if len(temp) + len(sp) <= max_len:
+                        temp += sp
+                    else:
+                        if temp:
+                            final_parts.append(temp)
+                        temp = sp
+                if temp:
+                    final_parts.append(temp)
+
+        # Force split very long segments without punctuation
+        very_final_parts = []
+        for part in final_parts:
+            part = part.strip()
+            if len(part) <= 28:
+                very_final_parts.append(part)
+            else:
+                start_idx = 0
+                while start_idx < len(part):
+                    very_final_parts.append(part[start_idx:start_idx+25])
+                    start_idx += 25
+
+        return very_final_parts
 
     def _read_text(self, path: Path) -> str:
         try:

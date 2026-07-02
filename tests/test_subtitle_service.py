@@ -51,3 +51,31 @@ def test_subtitle_settings_are_reflected() -> None:
 
     assert "Yu Gothic,80" in ass
     assert ",1,8,0,8,80,80,120,1" in ass
+
+
+def test_subtitles_auto_split() -> None:
+    # A single very long cue should be split
+    text = '[{"start": 0.0, "end": 10.0, "text": "私たちは、その光を観測することでブラックホールの存在を知っています。そして中心には『特異点』と呼ばれる場所があると考えられていますが、そこで何が起きているのかは、今の科学でも説明できません。"}]'
+    cues = SubtitleService().parse_subtitles(text)
+    
+    # It should split into multiple cues
+    assert len(cues) > 1
+    
+    # Timings should be distributed proportionally
+    assert cues[0].start == 0.0
+    assert cues[-1].end == 10.0
+    
+    # Check that no cue has text longer than 28 characters
+    for cue in cues:
+        assert len(cue.text) <= 28
+        assert cue.start < cue.end
+
+
+def test_subtitles_auto_wrap() -> None:
+    # A single line longer than 15 characters should be auto-wrapped with a newline (\N) in ASS
+    cue = SubtitleService().parse_subtitles('[{"start": 0.0, "end": 3.0, "text": "とても小さな場所に大量の重さが集まった天体です。"}]')[0]
+    settings = AppSettings()
+    ass = SubtitleService().build_ass([cue], settings)
+    
+    # It should have a line break \N in the dialogue event
+    assert r"とても小さな場所に大量の\N重さが集まった天体です。" in ass
