@@ -138,7 +138,7 @@ class FFmpegEditor(VideoEditor):
 
         return (
             f"{base},setsar=1,"
-            f"zoompan=z='min(zoom+0.0015,1.12)':"
+            f"zoompan=z='1.0+0.15*on/{frames_per_image}':"
             f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
             f"d={frames_per_image}:s={request.width}x{request.height}:fps={request.fps},"
             f"trim=duration={frames_per_image / request.fps:.3f},setpts=PTS-STARTPTS[{label}]"
