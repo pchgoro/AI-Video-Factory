@@ -13,10 +13,12 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTextEdit,
     QVBoxLayout,
     QMessageBox,
+    QWidget,
 )
 
 from config import AppPaths
@@ -33,7 +35,11 @@ class SettingsDialog(QDialog):
         self.resize(640, 620)
         self.paths = paths
 
-        layout = QVBoxLayout(self)
+        root_layout = QVBoxLayout(self)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        layout = QVBoxLayout(content)
         form = QFormLayout()
 
         self.duration_box = QComboBox()
@@ -137,6 +143,8 @@ class SettingsDialog(QDialog):
         diagnostics_button = QPushButton("環境チェック")
         diagnostics_button.clicked.connect(self.run_diagnostics)
         layout.addWidget(diagnostics_button)
+        scroll.setWidget(content)
+        root_layout.addWidget(scroll)
 
         buttons = QHBoxLayout()
         buttons.addStretch()
@@ -146,7 +154,7 @@ class SettingsDialog(QDialog):
         save_button.clicked.connect(self.accept)
         buttons.addWidget(cancel_button)
         buttons.addWidget(save_button)
-        layout.addLayout(buttons)
+        root_layout.addLayout(buttons)
 
     def get_settings(self) -> AppSettings:
         genres = [line.strip() for line in self.genres_edit.toPlainText().splitlines() if line.strip()]

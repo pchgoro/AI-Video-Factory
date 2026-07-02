@@ -187,9 +187,15 @@ class MainWindow(QMainWindow):
 
     def _build_main_tabs(self) -> QTabWidget:
         self.main_tabs = QTabWidget()
-        self.main_tabs.addTab(self._build_dashboard_tab(), "ホーム")
-        self.main_tabs.addTab(self._build_wizard_tab(), "制作ウィザード")
+        self.main_tabs.addTab(self._scrollable_page(self._build_dashboard_tab()), "ホーム")
+        self.main_tabs.addTab(self._scrollable_page(self._build_wizard_tab()), "制作ウィザード")
         return self.main_tabs
+
+    def _scrollable_page(self, widget: QWidget) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(widget)
+        return scroll
 
     def _build_dashboard_tab(self) -> QWidget:
         panel = QWidget()

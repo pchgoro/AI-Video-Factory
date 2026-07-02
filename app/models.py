@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-DEFAULT_DURATIONS = ["30秒", "90秒", "3分"]
+DEFAULT_DURATIONS = ["30秒", "60秒", "90秒", "3分"]
 DEFAULT_GENRES = ["宇宙", "株", "AIニュース", "歴史", "猫", "偉人"]
 DEFAULT_TOPICS = ["ブラックホール", "ホワイトホール", "ダークマター", "量子もつれ", "AIエージェント", "半導体", "保護猫"]
 PROGRESS_ITEMS = ["台本", "画像", "音声", "字幕", "動画", "投稿"]
