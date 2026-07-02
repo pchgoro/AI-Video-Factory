@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import re
+import shutil
 import unicodedata
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +26,7 @@ class ProjectService:
 
     def __init__(self, paths: AppPaths) -> None:
         self.paths = paths
+        self.logger = logging.getLogger("ai_video_factory")
 
     def list_projects(self) -> list[ProjectInfo]:
         self.paths.projects_dir.mkdir(parents=True, exist_ok=True)
@@ -81,7 +84,17 @@ class ProjectService:
             },
             touch_metadata=False,
         )
+        self.logger.info("プロジェクト作成: %s", project_dir)
         return self.load_project(project_dir)
+
+    def delete_project(self, project: ProjectInfo) -> None:
+        """指定プロジェクトのフォルダを削除します。呼び出し側で確認を済ませてから使います。"""
+        if not project.path.exists():
+            return
+        if project.path.parent.resolve() != self.paths.projects_dir.resolve():
+            raise ValueError("projectsフォルダ外のプロジェクトは削除できません。")
+        shutil.rmtree(project.path)
+        self.logger.info("プロジェクト削除: %s", project.path)
 
     def create_projects_from_topics(
         self,
@@ -134,6 +147,7 @@ class ProjectService:
             },
         )
         self.update_metadata(project.path, {"title": parsed.title.strip(), "image_count": len(parsed.image_prompts) or project.image_count})
+        self.logger.info("ChatGPT回答保存: %s", project.path)
 
     def save_preview_files(self, project: ProjectInfo, values: dict[str, str]) -> None:
         self.save_texts(project.path, values)

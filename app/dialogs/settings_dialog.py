@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -15,18 +16,22 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QTextEdit,
     QVBoxLayout,
+    QMessageBox,
 )
 
+from config import AppPaths
 from models import AppSettings, DEFAULT_DURATIONS
+from services.diagnostics_service import DiagnosticsService
 
 
 class SettingsDialog(QDialog):
     """Phase4の設定を変更する画面です。"""
 
-    def __init__(self, settings: AppSettings, parent=None) -> None:
+    def __init__(self, settings: AppSettings, paths: AppPaths | None = None, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("設定")
         self.resize(640, 620)
+        self.paths = paths
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -84,12 +89,31 @@ class SettingsDialog(QDialog):
         self.zoom_check.setChecked(settings.zoom_enabled)
         form.addRow("ズーム", self.zoom_check)
 
+        self.bgm_enabled_check = QCheckBox("BGMを使用する")
+        self.bgm_enabled_check.setChecked(settings.bgm_enabled)
+        form.addRow("BGM", self.bgm_enabled_check)
+
+        self.bgm_volume_box = QSpinBox()
+        self.bgm_volume_box.setRange(0, 100)
+        self.bgm_volume_box.setValue(settings.bgm_volume_percent)
+        self.bgm_volume_box.setSuffix("%")
+        form.addRow("BGM音量", self.bgm_volume_box)
+
         layout.addLayout(form)
+
+        bgm_folder_button = QPushButton("BGMフォルダを開く")
+        bgm_folder_button.clicked.connect(self.open_bgm_folder)
+        layout.addWidget(bgm_folder_button)
+
         layout.addWidget(QLabel("ジャンル（1行に1つ）"))
 
         self.genres_edit = QTextEdit()
         self.genres_edit.setPlainText("\n".join(settings.genres))
         layout.addWidget(self.genres_edit)
+
+        diagnostics_button = QPushButton("環境チェック")
+        diagnostics_button.clicked.connect(self.run_diagnostics)
+        layout.addWidget(diagnostics_button)
 
         buttons = QHBoxLayout()
         buttons.addStretch()
@@ -116,9 +140,29 @@ class SettingsDialog(QDialog):
             output_height=self.height_box.value(),
             seconds_per_image=self.seconds_box.value(),
             zoom_enabled=self.zoom_check.isChecked(),
+            bgm_enabled=self.bgm_enabled_check.isChecked(),
+            bgm_volume_percent=self.bgm_volume_box.value(),
         )
 
     def _select_save_dir(self) -> None:
         selected = QFileDialog.getExistingDirectory(self, "保存先を選択", self.save_dir_edit.text())
         if selected:
             self.save_dir_edit.setText(str(Path(selected)))
+
+    def run_diagnostics(self) -> None:
+        if self.paths is None:
+            QMessageBox.information(self, "環境チェック", "保存先の情報がないため確認できません。")
+            return
+        settings = self.get_settings()
+        lines = [
+            f"{item.status}: {item.name} - {item.message}"
+            for item in DiagnosticsService(self.paths, settings).run()
+        ]
+        QMessageBox.information(self, "環境チェック", "\n".join(lines))
+
+    def open_bgm_folder(self) -> None:
+        if self.paths is None:
+            QMessageBox.information(self, "BGMフォルダ", "保存先の情報がないため開けません。")
+            return
+        self.paths.bgm_dir.mkdir(parents=True, exist_ok=True)
+        os.startfile(self.paths.bgm_dir)

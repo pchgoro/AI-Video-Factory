@@ -25,6 +25,8 @@ class AppSettings:
     output_height: int = 1920
     seconds_per_image: int = 5
     zoom_enabled: bool = True
+    bgm_enabled: bool = True
+    bgm_volume_percent: int = 20
 
 
 @dataclass

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from models import AppSettings, ProjectInfo
 from video_editors.base import VideoEditRequest, VideoEditResult, VideoEditor
 
@@ -12,6 +14,7 @@ class VideoRenderService:
         self.settings = settings
 
     def render_project(self, project: ProjectInfo) -> VideoEditResult:
+        bgm_path = self._find_bgm_file(self._bgm_dir_for_project(project.path))
         request = VideoEditRequest(
             project_dir=project.path,
             images_dir=project.path / "images",
@@ -22,5 +25,18 @@ class VideoRenderService:
             height=self.settings.output_height,
             seconds_per_image=self.settings.seconds_per_image,
             zoom_enabled=self.settings.zoom_enabled,
+            bgm_path=bgm_path,
+            bgm_volume=max(0.0, min(1.0, self.settings.bgm_volume_percent / 100)),
         )
         return self.editor.render(request)
+
+    def _find_bgm_file(self, bgm_dir: Path) -> Path | None:
+        if not self.settings.bgm_enabled or not bgm_dir.exists():
+            return None
+        extensions = {".mp3", ".wav"}
+        return next((path for path in sorted(bgm_dir.iterdir()) if path.is_file() and path.suffix.lower() in extensions), None)
+
+    def _bgm_dir_for_project(self, project_dir: Path) -> Path:
+        if project_dir.parent.name == "projects":
+            return project_dir.parent.parent / "assets" / "bgm"
+        return project_dir.parent / "assets" / "bgm"

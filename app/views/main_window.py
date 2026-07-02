@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import webbrowser
+import logging
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QStringListModel, QUrl
@@ -85,6 +86,7 @@ class MainWindow(QMainWindow):
         dashboard_service: DashboardService,
         video_render_service: VideoRenderService,
         voicevox_service: VoicevoxService,
+        version_info: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
         self.paths = paths
@@ -95,6 +97,8 @@ class MainWindow(QMainWindow):
         self.dashboard_service = dashboard_service
         self.video_render_service = video_render_service
         self.voicevox_service = voicevox_service
+        self.version_info = version_info or {}
+        self.logger = logging.getLogger("ai_video_factory")
         self.parser = ChatGptAnswerParser()
         self.settings = settings_service.load()
         self.current_project: ProjectInfo | None = None
@@ -269,7 +273,14 @@ class MainWindow(QMainWindow):
 
         self.status_label = QLabel("準備完了")
         self.status_label.setStyleSheet("color: #9cdcfe;")
-        layout.addWidget(self.status_label)
+        footer = QHBoxLayout()
+        footer.addWidget(self.status_label)
+        footer.addStretch()
+        version_text = f"{self.version_info.get('phase', 'Phase4.5')} v{self.version_info.get('version', '0.4.5')}"
+        self.version_label = QLabel(version_text)
+        self.version_label.setStyleSheet("color: #8a8a8a;")
+        footer.addWidget(self.version_label)
+        layout.addLayout(footer)
         return panel
 
     def _build_wizard_bar(self) -> QWidget:
@@ -844,7 +855,7 @@ class MainWindow(QMainWindow):
         self.update_wizard()
 
     def open_settings(self) -> None:
-        dialog = SettingsDialog(self.settings, self)
+        dialog = SettingsDialog(self.settings, self.paths, self)
         if dialog.exec() != SettingsDialog.Accepted:
             return
         self.settings = dialog.get_settings()

@@ -35,6 +35,8 @@ class SettingsService:
             output_height=int(data.get("output_height", 1920)),
             seconds_per_image=int(data.get("seconds_per_image", 5)),
             zoom_enabled=bool(data.get("zoom_enabled", True)),
+            bgm_enabled=bool(data.get("bgm_enabled", True)),
+            bgm_volume_percent=int(data.get("bgm_volume_percent", 20)),
         )
 
     def save(self, settings: AppSettings) -> None:

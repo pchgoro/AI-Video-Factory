@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from json import JSONDecodeError
 from typing import Any
@@ -22,19 +23,24 @@ class ChatGptAnswerParser:
     """ChatGPTのJSON回答を標準形式へ変換します。旧テキスト形式にも対応します。"""
 
     def parse(self, raw_text: str) -> ParsedChatGptAnswer:
+        logger = logging.getLogger("ai_video_factory")
         text = raw_text.strip()
         if not text:
+            logger.warning("JSON解析: 空の入力")
             raise ChatGptParseError("ChatGPTの回答が空です。JSONを貼り付けてください。")
 
         if self._looks_like_json(text):
+            logger.info("JSON解析: JSON形式として解析")
             return self._parse_json(text)
 
+        logger.info("JSON解析: 旧形式として解析")
         return self._parse_legacy(text)
 
     def _parse_json(self, text: str) -> ParsedChatGptAnswer:
         try:
             data = json.loads(text)
         except JSONDecodeError as exc:
+            logging.getLogger("ai_video_factory").warning("JSON解析エラー: %s", exc.msg)
             raise ChatGptParseError(
                 f"JSONの形式が壊れています。カンマ、引用符、かっこの閉じ忘れを確認してください。\n詳細: {exc.msg}"
             ) from exc

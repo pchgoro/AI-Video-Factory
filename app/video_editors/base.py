@@ -19,6 +19,9 @@ class VideoEditRequest:
     fps: int = 30
     seconds_per_image: int = 5
     zoom_enabled: bool = True
+    bgm_path: Path | None = None
+    bgm_volume: float = 0.2
+    voice_volume: float = 1.0
 
 
 @dataclass(frozen=True)
