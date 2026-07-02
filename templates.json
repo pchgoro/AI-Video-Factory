@@ -1,0 +1,44 @@
+[
+  {
+    "name": "宇宙",
+    "genre": "宇宙",
+    "style": "宇宙ドキュメンタリー風。神秘的だが中学生にも分かる語り口",
+    "angle": "冒頭に強い疑問を置き、科学的にやさしく説明する",
+    "image_style": "cinematic space documentary style, 4K look, deep space, no text"
+  },
+  {
+    "name": "株",
+    "genre": "株",
+    "style": "落ち着いた経済解説。煽らず、初心者にも分かる",
+    "angle": "なぜ注目されているか、リスク、見るべきポイントを整理する",
+    "image_style": "clean financial documentary visuals, charts without readable text, 9:16, 4K look"
+  },
+  {
+    "name": "AIニュース",
+    "genre": "AIニュース",
+    "style": "最新テックニュース風。専門用語をほどいて説明する",
+    "angle": "何が新しいのか、生活や仕事への影響を短く伝える",
+    "image_style": "futuristic AI technology documentary, no readable text, 9:16, 4K look"
+  },
+  {
+    "name": "歴史",
+    "genre": "歴史",
+    "style": "歴史ドキュメンタリー風。物語として引き込む",
+    "angle": "人物、時代背景、意外な転換点を中心に構成する",
+    "image_style": "cinematic historical documentary, realistic, no text, 9:16"
+  },
+  {
+    "name": "猫",
+    "genre": "猫",
+    "style": "やさしい雑学ショート。かわいさと学びを両立する",
+    "angle": "身近な疑問から入り、豆知識として楽しくまとめる",
+    "image_style": "cute realistic cat documentary, warm indoor light, no text, 9:16"
+  },
+  {
+    "name": "偉人",
+    "genre": "偉人",
+    "style": "偉人の人生を短く熱量高く伝える",
+    "angle": "挫折、転機、現代への学びを一本道で語る",
+    "image_style": "cinematic biographical documentary scene, no readable text, 9:16"
+  }
+]
