@@ -40,6 +40,7 @@ def build_chatgpt_prompt(
 - 日本語ナレーション
 - 中学生にも分かる説明
 - 動画時間に応じて script の長さを調整する
+- voice_text は実際に読み上げるナレーション全文にする
 - 文体：{style}
 - 構成方針：{angle}
 
@@ -54,9 +55,13 @@ def build_chatgpt_prompt(
 - JSON以外の説明文を一切出さない
 - Markdownのコードブロックも使わない
 - 必ず次のキーを持つJSONだけを返す
+- script と voice_text は同じ内容にする
+- subtitles は voice_text で実際に読み上げる文章を、時刻ごとに短く区切ったものにする
+- subtitles の text はナレーションに無い別文、要約、補足説明にしない
 - subtitles は start / end / text を持つ配列にする
-- subtitles の start と end は秒数の数値にする
+- subtitles の start と end は `"0:00"` のような文字列ではなく、必ず 0.0 や 2.8 のような秒数の数値にする
 - 1字幕は1〜2行程度、表示時間は約2〜4秒、スマホ縦動画で読みやすい短い文にする
+- subtitles 全体を順番につなげると voice_text とほぼ同じ本文になるようにする
 - hashtags は文字列配列にする
 
 【JSON形式】

@@ -669,6 +669,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "VOICEVOXエラー", result.message)
             return
         self.current_project = self.project_service.load_project(self.current_project.path)
+        self._load_project_texts(self.current_project.path)
         self.update_progress_view()
         self.update_asset_list()
         self.update_wizard()
