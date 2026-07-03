@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import webbrowser
 import logging
 import re
@@ -52,6 +53,7 @@ from services.parser import ChatGptAnswerParser, ChatGptParseError
 from services.project_service import ProjectService
 from services.prompt_builder import build_bulk_image_prompt, build_chatgpt_prompt
 from services.settings_service import SettingsService
+from services.tag_service import TagService
 from services.template_service import TemplateService
 from services.topic_service import TopicService
 from services.video_render_service import VideoRenderService
@@ -134,6 +136,7 @@ class MainWindow(QMainWindow):
         self.logger = logging.getLogger("ai_video_factory")
         self.parser = ChatGptAnswerParser()
         self.image_import_service = ImageImportService()
+        self.tag_service = TagService()
         self.settings = settings_service.load()
         self.current_project: ProjectInfo | None = None
         self.projects: list[ProjectInfo] = []
@@ -165,7 +168,7 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         root = QSplitter(Qt.Horizontal)
-        root.addWidget(self._build_left_panel())
+        root.addWidget(self._scrollable_page(self._build_left_panel()))
         root.addWidget(self._build_main_tabs())
         root.setSizes([350, 1090])
         self.setCentralWidget(root)
@@ -223,6 +226,24 @@ class MainWindow(QMainWindow):
         start_bulk_button = QPushButton("制作開始")
         start_bulk_button.clicked.connect(self.start_bulk_projects)
         topic_layout.addWidget(start_bulk_button)
+
+        memo_box = QGroupBox("メモ")
+        memo_layout = QVBoxLayout(memo_box)
+        self.memo_edits: list[QTextEdit] = []
+        for index in range(10):
+            row = QHBoxLayout()
+            memo_edit = QTextEdit()
+            memo_edit.setPlaceholderText(f"メモ{index + 1}")
+            memo_edit.setFixedHeight(70)
+            memo_edit.textChanged.connect(self.save_memos)
+            copy_button = QPushButton("コピー")
+            copy_button.clicked.connect(lambda _checked=False, i=index: self.copy_memo_to_clipboard(i))
+            row.addWidget(QLabel(f"{index + 1}"))
+            row.addWidget(memo_edit, stretch=1)
+            row.addWidget(copy_button)
+            memo_layout.addLayout(row)
+            self.memo_edits.append(memo_edit)
+        topic_layout.addWidget(memo_box)
         layout.addWidget(topic_box, stretch=1)
         return panel
 
@@ -365,11 +386,16 @@ class MainWindow(QMainWindow):
         self.genre_box = QComboBox()
         self.image_count_box = QComboBox()
         self.image_count_box.addItems(["3", "4", "5", "6", "8"])
-        self.tags_input = QLineEdit()
-        self.tags_input.setPlaceholderText("例: 宇宙, 初心者向け, 90秒, TikTok")
+        self.youtube_tags_input = QLineEdit()
+        self.youtube_tags_input.setPlaceholderText("hashtags.txtから#を削除し、カンマ区切りで入力します")
+        self.tiktok_tags_input = QLineEdit()
+        self.tiktok_tags_input.setPlaceholderText("hashtags.txtをコピーし、最後に#VOICEVOXを追加します")
 
         form.addWidget(QLabel("テーマ"), 0, 0)
-        form.addWidget(self.topic_input, 0, 1, 1, 5)
+        form.addWidget(self.topic_input, 0, 1, 1, 4)
+        copy_topic_button = QPushButton("テーマコピー")
+        copy_topic_button.clicked.connect(self.copy_theme_to_clipboard)
+        form.addWidget(copy_topic_button, 0, 5)
         form.addWidget(QLabel("テンプレート"), 1, 0)
         form.addWidget(self.template_box, 1, 1)
         form.addWidget(QLabel("動画時間"), 1, 2)
@@ -378,11 +404,26 @@ class MainWindow(QMainWindow):
         form.addWidget(self.image_count_box, 1, 5)
         form.addWidget(QLabel("ジャンル"), 2, 0)
         form.addWidget(self.genre_box, 2, 1)
-        form.addWidget(QLabel("タグ"), 2, 2)
-        form.addWidget(self.tags_input, 2, 3, 1, 2)
-        save_tags_button = QPushButton("タグ保存")
-        save_tags_button.clicked.connect(self.save_current_tags)
-        form.addWidget(save_tags_button, 2, 5)
+        form.addWidget(QLabel("YouTubeタグ"), 2, 2)
+        form.addWidget(self.youtube_tags_input, 2, 3, 1, 2)
+        youtube_buttons = QHBoxLayout()
+        save_youtube_tags_button = QPushButton("youtubeタグ保存")
+        save_youtube_tags_button.clicked.connect(self.save_youtube_tags)
+        copy_youtube_tags_button = QPushButton("コピー")
+        copy_youtube_tags_button.clicked.connect(self.copy_youtube_tags_to_clipboard)
+        youtube_buttons.addWidget(save_youtube_tags_button)
+        youtube_buttons.addWidget(copy_youtube_tags_button)
+        form.addLayout(youtube_buttons, 2, 5)
+        form.addWidget(QLabel("TikTokタグ"), 3, 2)
+        form.addWidget(self.tiktok_tags_input, 3, 3, 1, 2)
+        tiktok_buttons = QHBoxLayout()
+        save_tiktok_tags_button = QPushButton("tiktokタグ保存")
+        save_tiktok_tags_button.clicked.connect(self.save_tiktok_tags)
+        copy_tiktok_tags_button = QPushButton("コピー")
+        copy_tiktok_tags_button.clicked.connect(self.copy_tiktok_tags_to_clipboard)
+        tiktok_buttons.addWidget(save_tiktok_tags_button)
+        tiktok_buttons.addWidget(copy_tiktok_tags_button)
+        form.addLayout(tiktok_buttons, 3, 5)
         return box
 
     def _build_preview_tab(self) -> QWidget:
@@ -521,6 +562,7 @@ class MainWindow(QMainWindow):
         self.reload_projects()
         self.refresh_topic_list()
         self.update_wizard()
+        self.load_memos()
 
     def apply_settings_to_ui(self) -> None:
         self.duration_box.setCurrentText(self.settings.default_duration)
@@ -608,8 +650,8 @@ class MainWindow(QMainWindow):
         self.genre_box.setCurrentText(self.current_project.genre)
         self._set_image_count(self.current_project.image_count)
         self.template_box.setCurrentText(self.current_project.template_name)
-        self.tags_input.setText(", ".join(self.current_project.tags))
         self._load_project_texts(self.current_project.path)
+        self._load_platform_tag_fields()
         self.update_progress_view()
         self.update_asset_list()
         self.update_image_prompt_list()
@@ -769,6 +811,7 @@ class MainWindow(QMainWindow):
         self.project_service.save_chatgpt_import(self.current_project, raw_text, parsed)
         self.current_project = self.project_service.load_project(self.current_project.path)
         self._load_project_texts(self.current_project.path)
+        self._load_platform_tag_fields()
         self.update_progress_view()
         self.update_asset_list()
         self.update_image_prompt_list()
@@ -808,6 +851,7 @@ class MainWindow(QMainWindow):
             return
         self.current_project = self.project_service.load_project(self.current_project.path)
         self._load_project_texts(self.current_project.path)
+        self._load_platform_tag_fields()
         self.update_progress_view()
         self.update_asset_list()
         self.update_wizard()
@@ -831,13 +875,71 @@ class MainWindow(QMainWindow):
         self.status_label.setText(result.message)
         self.content_tabs.setCurrentIndex(5)
 
-    def save_current_tags(self) -> None:
+    def save_youtube_tags(self) -> None:
         if self.current_project is None:
-            QMessageBox.warning(self, "タグ保存エラー", "先にプロジェクトを作成または選択してください。")
+            QMessageBox.warning(self, "YouTubeタグ保存エラー", "先にプロジェクトを作成または選択してください。")
             return
-        self.current_project = self.project_service.save_tags(self.current_project, self._parse_tags())
+        tags = self.tag_service.youtube_tags_from_hashtags(self._current_hashtags_text())
+        self.youtube_tags_input.setText(self.tag_service.youtube_text(tags))
+        self.current_project = self.project_service.save_platform_tags(self.current_project, youtube_tags=tags)
         self.reload_projects()
-        self.status_label.setText("タグを保存しました。")
+        self.status_label.setText("YouTubeタグを保存しました。")
+
+    def save_tiktok_tags(self) -> None:
+        if self.current_project is None:
+            QMessageBox.warning(self, "TikTokタグ保存エラー", "先にプロジェクトを作成または選択してください。")
+            return
+        tags = self.tag_service.tiktok_tags_from_hashtags(self._current_hashtags_text())
+        self.tiktok_tags_input.setText(self.tag_service.tiktok_text(tags))
+        self.current_project = self.project_service.save_platform_tags(self.current_project, tiktok_tags=tags)
+        self.reload_projects()
+        self.status_label.setText("TikTokタグを保存しました。")
+
+    def copy_theme_to_clipboard(self) -> None:
+        self._copy_text_to_clipboard(self.topic_input.text().strip(), "テーマ")
+
+    def copy_youtube_tags_to_clipboard(self) -> None:
+        self._copy_text_to_clipboard(self.youtube_tags_input.text().strip(), "YouTubeタグ")
+
+    def copy_tiktok_tags_to_clipboard(self) -> None:
+        self._copy_text_to_clipboard(self.tiktok_tags_input.text().strip(), "TikTokタグ")
+
+    def copy_memo_to_clipboard(self, index: int) -> None:
+        if index < 0 or index >= len(self.memo_edits):
+            return
+        self._copy_text_to_clipboard(self.memo_edits[index].toPlainText().strip(), f"メモ{index + 1}")
+
+    def _copy_text_to_clipboard(self, text: str, label: str) -> None:
+        if not text:
+            QMessageBox.warning(self, "コピーエラー", f"{label}が空です。")
+            return
+        QGuiApplication.clipboard().setText(text)
+        self.status_label.setText(f"{label}をコピーしました。")
+
+    def load_memos(self) -> None:
+        path = self._memos_path()
+        if not path.exists():
+            return
+        try:
+            values = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        if not isinstance(values, list):
+            return
+        for index, memo_edit in enumerate(getattr(self, "memo_edits", [])):
+            memo_edit.blockSignals(True)
+            memo_edit.setPlainText(str(values[index]) if index < len(values) else "")
+            memo_edit.blockSignals(False)
+
+    def save_memos(self) -> None:
+        values = [memo.toPlainText() for memo in getattr(self, "memo_edits", [])]
+        try:
+            self._memos_path().write_text(json.dumps(values, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            return
+
+    def _memos_path(self) -> Path:
+        return self.paths.base_dir / "memos.json"
 
     def not_implemented(self) -> None:
         QMessageBox.information(self, "未実装", "この機能は後で実装します。今回は自動投稿しません。")
@@ -1248,8 +1350,24 @@ class MainWindow(QMainWindow):
         self.image_count_box.setCurrentText(value)
 
     def _parse_tags(self) -> list[str]:
-        raw = self.tags_input.text().replace("、", ",")
-        return [tag.strip() for tag in raw.split(",") if tag.strip()]
+        return self.tag_service.parse_youtube_text(self.youtube_tags_input.text())
+
+    def _load_platform_tag_fields(self) -> None:
+        if self.current_project is None:
+            return
+        hashtags_text = self._current_hashtags_text()
+        youtube_tags = self.current_project.youtube_tags or self.current_project.tags or self.tag_service.youtube_tags_from_hashtags(hashtags_text)
+        tiktok_tags = self.current_project.tiktok_tags or self.tag_service.tiktok_tags_from_hashtags(hashtags_text)
+        self.youtube_tags_input.setText(self.tag_service.youtube_text(youtube_tags))
+        self.tiktok_tags_input.setText(self.tag_service.tiktok_text(tiktok_tags))
+
+    def _current_hashtags_text(self) -> str:
+        text = self.preview_hashtags.toPlainText().strip()
+        if text:
+            return text
+        if self.current_project is None:
+            return ""
+        return self._read_text(self.current_project.path / "hashtags.txt").strip()
 
     def _project_display_name(self, project: ProjectInfo) -> str:
         done_count = sum(1 for value in project.progress.values() if value)

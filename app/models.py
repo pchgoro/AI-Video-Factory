@@ -68,6 +68,8 @@ class ProjectInfo:
     series: str = ""
     series_number: int = 1
     tags: list[str] = field(default_factory=list)
+    youtube_tags: list[str] = field(default_factory=list)
+    tiktok_tags: list[str] = field(default_factory=list)
     posted_date: str = ""
     created_at: str = ""
     updated_at: str = ""

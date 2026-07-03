@@ -38,6 +38,11 @@ def test_project_create_save_reload_delete(tmp_path) -> None:
     assert (project.path / "project.json").exists()
     assert (project.path / "raw_chatgpt.txt").exists()
 
+    tagged = service.save_platform_tags(reloaded, youtube_tags=["宇宙", "AI"], tiktok_tags=["#宇宙", "#AI", "#VOICEVOX"])
+    assert tagged.youtube_tags == ["宇宙", "AI"]
+    assert tagged.tiktok_tags == ["#宇宙", "#AI", "#VOICEVOX"]
+    assert tagged.tags == ["宇宙", "AI"]
+
     service.mark_image_generated(reloaded, 1)
     service.mark_image_generated(reloaded, 2)
     service.mark_image_generated(reloaded, 3)

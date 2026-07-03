@@ -63,6 +63,8 @@ class ProjectService:
             "series": series_name,
             "series_number": series_number,
             "tags": tags or [],
+            "youtube_tags": tags or [],
+            "tiktok_tags": [],
             "posted_date": "",
             "created_at": now,
             "updated_at": now,
@@ -126,6 +128,8 @@ class ProjectService:
             series=str(metadata.get("series", "")),
             series_number=int(metadata.get("series_number", 1)),
             tags=list(metadata.get("tags", [])) if isinstance(metadata.get("tags", []), list) else [],
+            youtube_tags=list(metadata.get("youtube_tags", metadata.get("tags", []))) if isinstance(metadata.get("youtube_tags", metadata.get("tags", [])), list) else [],
+            tiktok_tags=list(metadata.get("tiktok_tags", [])) if isinstance(metadata.get("tiktok_tags", []), list) else [],
             posted_date=str(metadata.get("posted_date", "")),
             created_at=str(metadata.get("created_at", "")),
             updated_at=str(metadata.get("updated_at", "")),
@@ -153,7 +157,22 @@ class ProjectService:
         self.save_texts(project.path, values)
 
     def save_tags(self, project: ProjectInfo, tags: list[str]) -> ProjectInfo:
-        self.update_metadata(project.path, {"tags": tags})
+        self.update_metadata(project.path, {"tags": tags, "youtube_tags": tags})
+        return self.load_project(project.path)
+
+    def save_platform_tags(
+        self,
+        project: ProjectInfo,
+        youtube_tags: list[str] | None = None,
+        tiktok_tags: list[str] | None = None,
+    ) -> ProjectInfo:
+        updates: dict[str, object] = {}
+        if youtube_tags is not None:
+            updates["youtube_tags"] = youtube_tags
+            updates["tags"] = youtube_tags
+        if tiktok_tags is not None:
+            updates["tiktok_tags"] = tiktok_tags
+        self.update_metadata(project.path, updates)
         return self.load_project(project.path)
 
     def save_texts(self, project_dir: Path, values: dict[str, str], touch_metadata: bool = True) -> None:
