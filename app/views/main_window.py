@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTabWidget,
@@ -74,7 +75,9 @@ QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
 QTabWidget::pane { border: 1px solid #3c3c3c; }
 QTabBar::tab { background: #252526; color: #d4d4d4; padding: 8px 12px; border: 1px solid #3c3c3c; }
 QTabBar::tab:selected { background: #1e1e1e; border-bottom-color: #1e1e1e; }
-QSplitter::handle { background: #333333; }
+QSplitter::handle { background: #4a4a4a; }
+QSplitter::handle:vertical { min-height: 8px; margin: 2px 0; }
+QSplitter::handle:horizontal { min-width: 8px; margin: 0 2px; }
 """
 
 
@@ -197,6 +200,8 @@ class MainWindow(QMainWindow):
 
         self.project_list = QListWidget()
         self.project_list.itemSelectionChanged.connect(self.load_selected_project)
+        self.project_list.setMinimumHeight(80)
+        self.project_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         project_list_widget = self.project_list
 
         topic_box = QGroupBox("一括ネタ管理")
@@ -244,11 +249,12 @@ class MainWindow(QMainWindow):
             memo_layout.addLayout(row)
             self.memo_edits.append(memo_edit)
         topic_layout.addWidget(memo_box)
+        topic_scroll = self._splitter_scroll_area(topic_box)
         self.left_content_splitter = QSplitter(Qt.Vertical)
         self.left_content_splitter.setHandleWidth(8)
         self.left_content_splitter.setChildrenCollapsible(False)
         self.left_content_splitter.addWidget(project_list_widget)
-        self.left_content_splitter.addWidget(topic_box)
+        self.left_content_splitter.addWidget(topic_scroll)
         self.left_content_splitter.setSizes([260, 420])
         layout.addWidget(self.left_content_splitter, stretch=1)
         return panel
@@ -262,6 +268,14 @@ class MainWindow(QMainWindow):
     def _scrollable_page(self, widget: QWidget) -> QScrollArea:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setWidget(widget)
+        return scroll
+
+    def _splitter_scroll_area(self, widget: QWidget) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMinimumHeight(80)
+        scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         scroll.setWidget(widget)
         return scroll
 
@@ -503,11 +517,15 @@ class MainWindow(QMainWindow):
         layout.addLayout(import_buttons)
 
         imported_images_panel = QWidget()
+        imported_images_panel.setMinimumHeight(80)
+        imported_images_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         imported_images_layout = QVBoxLayout(imported_images_panel)
         imported_images_layout.setContentsMargins(0, 0, 0, 0)
         imported_images_layout.addWidget(QLabel("取り込み済み画像"))
         self.image_thumbnail_scroll = QScrollArea()
         self.image_thumbnail_scroll.setWidgetResizable(True)
+        self.image_thumbnail_scroll.setMinimumHeight(60)
+        self.image_thumbnail_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         self.image_thumbnail_container = QWidget()
         self.image_thumbnail_layout = QVBoxLayout(self.image_thumbnail_container)
         self.image_thumbnail_layout.addStretch()
@@ -515,11 +533,15 @@ class MainWindow(QMainWindow):
         imported_images_layout.addWidget(self.image_thumbnail_scroll)
 
         asset_list_panel = QWidget()
+        asset_list_panel.setMinimumHeight(80)
+        asset_list_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         asset_list_layout = QVBoxLayout(asset_list_panel)
         asset_list_layout.setContentsMargins(0, 0, 0, 0)
         asset_list_layout.addWidget(QLabel("素材一覧"))
         self.asset_list = QListWidget()
         self.asset_list.itemDoubleClicked.connect(self.open_asset_folder)
+        self.asset_list.setMinimumHeight(60)
+        self.asset_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         asset_list_layout.addWidget(self.asset_list)
 
         self.assets_splitter = QSplitter(Qt.Vertical)
