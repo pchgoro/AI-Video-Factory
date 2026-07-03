@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import webbrowser
 import logging
+import re
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QStringListModel, QUrl
@@ -47,7 +48,7 @@ from models import DEFAULT_DURATIONS, PROGRESS_ITEMS, ProjectInfo, PromptTemplat
 from services.dashboard_service import DashboardService
 from services.parser import ChatGptAnswerParser, ChatGptParseError
 from services.project_service import ProjectService
-from services.prompt_builder import build_chatgpt_prompt
+from services.prompt_builder import build_bulk_image_prompt, build_chatgpt_prompt
 from services.settings_service import SettingsService
 from services.template_service import TemplateService
 from services.topic_service import TopicService
@@ -246,6 +247,7 @@ class MainWindow(QMainWindow):
             ("ChatGPTを開く", self.open_chatgpt),
             ("プロンプト生成", self.generate_prompt),
             ("プロンプトをコピー", self.copy_prompt),
+            ("画像生成プロンプトをコピー", self.copy_bulk_image_prompt),
             ("プロジェクト作成", self.create_project),
             ("VOICEVOX音声生成", self.generate_voice),
             ("FFmpeg動画生成", self.render_video),
@@ -268,6 +270,7 @@ class MainWindow(QMainWindow):
         self.content_tabs.addTab(self.answer_text, "JSON回答貼り付け")
         self.content_tabs.addTab(self._build_preview_tab(), "プレビュー編集")
         self.content_tabs.addTab(self._build_image_prompts_tab(), "画像プロンプト")
+        self.content_tabs.addTab(self._build_bulk_image_prompt_tab(), "一括画像生成")
         self.content_tabs.addTab(self._build_assets_tab(), "素材管理")
         self.content_tabs.addTab(self._build_video_preview_tab(), "完成動画プレビュー")
         layout.addWidget(self.content_tabs, stretch=2)
@@ -315,8 +318,8 @@ class MainWindow(QMainWindow):
         self.duration_box = QComboBox()
         self.duration_box.addItems(DEFAULT_DURATIONS)
         self.genre_box = QComboBox()
-        self.image_count_box = QSpinBox()
-        self.image_count_box.setRange(3, 8)
+        self.image_count_box = QComboBox()
+        self.image_count_box.addItems(["3", "4", "5", "6", "8"])
         self.tags_input = QLineEdit()
         self.tags_input.setPlaceholderText("例: 宇宙, 初心者向け, 90秒, TikTok")
 
@@ -367,6 +370,24 @@ class MainWindow(QMainWindow):
         self.image_prompt_layout.addStretch()
         self.image_prompt_scroll.setWidget(self.image_prompt_container)
         layout.addWidget(self.image_prompt_scroll)
+        return panel
+
+    def _build_bulk_image_prompt_tab(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        self.bulk_image_prompt_text = QTextEdit()
+        self.bulk_image_prompt_text.setPlaceholderText("画像生成プロンプトのプレビューが表示されます。編集してからコピーできます。")
+        layout.addWidget(self.bulk_image_prompt_text, stretch=1)
+
+        buttons = QHBoxLayout()
+        refresh_button = QPushButton("画像生成プロンプトを作成")
+        refresh_button.clicked.connect(self.refresh_bulk_image_prompt)
+        copy_button = QPushButton("画像生成プロンプトをコピー")
+        copy_button.clicked.connect(self.copy_bulk_image_prompt)
+        buttons.addWidget(refresh_button)
+        buttons.addWidget(copy_button)
+        buttons.addStretch()
+        layout.addLayout(buttons)
         return panel
 
     def _build_assets_tab(self) -> QWidget:
@@ -431,7 +452,7 @@ class MainWindow(QMainWindow):
 
     def apply_settings_to_ui(self) -> None:
         self.duration_box.setCurrentText(self.settings.default_duration)
-        self.image_count_box.setValue(self.settings.default_image_count)
+        self._set_image_count(self.settings.default_image_count)
         self.genre_box.clear()
         self.genre_box.addItems(self.settings.genres)
         self.genre_filter.blockSignals(True)
@@ -508,7 +529,7 @@ class MainWindow(QMainWindow):
         self.topic_input.setText(self.current_project.topic)
         self.duration_box.setCurrentText(self.current_project.duration or self.settings.default_duration)
         self.genre_box.setCurrentText(self.current_project.genre)
-        self.image_count_box.setValue(self.current_project.image_count)
+        self._set_image_count(self.current_project.image_count)
         self.template_box.setCurrentText(self.current_project.template_name)
         self.tags_input.setText(", ".join(self.current_project.tags))
         self._load_project_texts(self.current_project.path)
@@ -564,6 +585,46 @@ class MainWindow(QMainWindow):
         QGuiApplication.clipboard().setText(text)
         self.status_label.setText("プロンプトをコピーしました。ChatGPTへ貼り付けてください。")
 
+    def refresh_bulk_image_prompt(self) -> None:
+        image_count = int(self.image_count_box.currentText())
+        prompt = build_bulk_image_prompt(
+            self._current_image_prompts(),
+            image_count,
+            self.settings.image_common_conditions,
+            self.current_template(),
+        )
+        self.bulk_image_prompt_text.setPlainText(prompt)
+        self.content_tabs.setCurrentWidget(self.bulk_image_prompt_text.parentWidget())
+        self.status_label.setText("画像生成プロンプトを作成しました。内容を確認してコピーできます。")
+
+    def copy_bulk_image_prompt(self) -> None:
+        if not self.bulk_image_prompt_text.toPlainText().strip():
+            self.refresh_bulk_image_prompt()
+        text = self.bulk_image_prompt_text.toPlainText().strip()
+        if not text:
+            QMessageBox.warning(self, "コピーエラー", "画像生成プロンプトがありません。")
+            return
+        QGuiApplication.clipboard().setText(text)
+        self.status_label.setText("画像生成プロンプトをコピーしました。ChatGPTへ貼り付けてください。")
+        QMessageBox.information(self, "コピー成功", "画像生成プロンプトをコピーしました。")
+
+    def _current_image_prompts(self) -> list[str]:
+        text = self.preview_images.toPlainText().strip()
+        prompts = self._split_image_prompt_text(text)
+        if prompts:
+            return prompts
+        if self.current_project is None:
+            return []
+        return [prompt for _index, prompt, _generated in self.project_service.image_prompt_items(self.current_project) if prompt.strip()]
+
+    def _split_image_prompt_text(self, text: str) -> list[str]:
+        if not text.strip():
+            return []
+        blocks = [block.strip() for block in re.split(r"\n\s*\n", text) if block.strip()]
+        if len(blocks) > 1:
+            return blocks
+        return [line.strip() for line in text.splitlines() if line.strip()]
+
     def create_project(self) -> None:
         values = self._read_form_values()
         if values is None:
@@ -593,7 +654,7 @@ class MainWindow(QMainWindow):
             return
         duration = self.duration_box.currentText()
         genre = self.genre_box.currentText()
-        image_count = self.image_count_box.value()
+        image_count = int(self.image_count_box.currentText())
         template = self.current_template()
         tags = self._parse_tags()
 
@@ -882,7 +943,11 @@ class MainWindow(QMainWindow):
         if not topic:
             QMessageBox.warning(self, "入力エラー", "テーマを入力してください。")
             return None
-        return topic, self.duration_box.currentText(), self.genre_box.currentText(), self.image_count_box.value(), self._parse_tags()
+        return topic, self.duration_box.currentText(), self.genre_box.currentText(), int(self.image_count_box.currentText()), self._parse_tags()
+
+    def _set_image_count(self, image_count: int) -> None:
+        value = str(image_count if image_count in {3, 4, 5, 6, 8} else 5)
+        self.image_count_box.setCurrentText(value)
 
     def _parse_tags(self) -> list[str]:
         raw = self.tags_input.text().replace("、", ",")

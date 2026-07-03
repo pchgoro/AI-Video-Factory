@@ -47,9 +47,9 @@ class SettingsDialog(QDialog):
         self.duration_box.setCurrentText(settings.default_duration)
         form.addRow("デフォルト動画時間", self.duration_box)
 
-        self.image_count_box = QSpinBox()
-        self.image_count_box.setRange(3, 8)
-        self.image_count_box.setValue(settings.default_image_count)
+        self.image_count_box = QComboBox()
+        self.image_count_box.addItems(["3", "4", "5", "6", "8"])
+        self.image_count_box.setCurrentText(str(settings.default_image_count if settings.default_image_count in {3, 4, 5, 6, 8} else 5))
         form.addRow("デフォルト画像枚数", self.image_count_box)
 
         save_row = QHBoxLayout()
@@ -128,6 +128,11 @@ class SettingsDialog(QDialog):
         self.subtitle_shadow_check.setChecked(settings.subtitle_shadow_enabled)
         form.addRow("字幕影", self.subtitle_shadow_check)
 
+        self.image_common_conditions_edit = QTextEdit()
+        self.image_common_conditions_edit.setPlainText(settings.image_common_conditions)
+        self.image_common_conditions_edit.setFixedHeight(120)
+        form.addRow("画像共通条件", self.image_common_conditions_edit)
+
         layout.addLayout(form)
 
         bgm_folder_button = QPushButton("BGMフォルダを開く")
@@ -160,7 +165,7 @@ class SettingsDialog(QDialog):
         genres = [line.strip() for line in self.genres_edit.toPlainText().splitlines() if line.strip()]
         return AppSettings(
             default_duration=self.duration_box.currentText(),
-            default_image_count=self.image_count_box.value(),
+            default_image_count=int(self.image_count_box.currentText()),
             save_dir=self.save_dir_edit.text().strip(),
             genres=genres,
             video_editor_engine=self.video_editor_box.currentText(),
@@ -178,6 +183,8 @@ class SettingsDialog(QDialog):
             subtitle_position=self.subtitle_position_box.currentText(),
             subtitle_outline=self.subtitle_outline_box.value(),
             subtitle_shadow_enabled=self.subtitle_shadow_check.isChecked(),
+            image_common_conditions=self.image_common_conditions_edit.toPlainText().strip()
+            or "・9:16\n・4K\n・文字なし\n・リアル\n・映画風\n・ドキュメンタリー風",
         )
 
     def _select_save_dir(self) -> None:

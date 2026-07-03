@@ -42,6 +42,10 @@ class SettingsService:
             subtitle_position=data.get("subtitle_position", "下"),
             subtitle_outline=int(data.get("subtitle_outline", 4)),
             subtitle_shadow_enabled=bool(data.get("subtitle_shadow_enabled", True)),
+            image_common_conditions=data.get(
+                "image_common_conditions",
+                "・9:16\n・4K\n・文字なし\n・リアル\n・映画風\n・ドキュメンタリー風",
+            ),
         )
 
     def save(self, settings: AppSettings) -> None:

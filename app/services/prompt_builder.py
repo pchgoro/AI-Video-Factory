@@ -4,6 +4,85 @@ import json
 
 from models import PromptTemplate
 
+DEFAULT_IMAGE_COMMON_CONDITIONS = "\n".join([
+    "・9:16",
+    "・4K",
+    "・文字なし",
+    "・リアル",
+    "・映画風",
+    "・ドキュメンタリー風",
+])
+
+IMAGE_BATCH_OPTIMIZATION_LINES = [
+    "画像はすべて同時に生成してください。",
+    "画像ごとに構図・距離・アングル・演出を変えてください。",
+    "全画像で同じ構図や似た構図にならないようにしてください。",
+    "画像内に文字・ロゴ・ウォーターマークは入れないでください。",
+    "全画像を同じ世界観・色味・雰囲気で統一してください。",
+]
+
+
+def build_bulk_image_prompt(
+    image_prompts: list[str],
+    image_count: int,
+    common_conditions: str | None = None,
+    template: PromptTemplate | None = None,
+) -> str:
+    """ChatGPTへ1回貼るための複数画像生成プロンプトを生成します。"""
+    count = max(1, int(image_count))
+    prompts = [prompt.strip() for prompt in image_prompts if prompt and prompt.strip()]
+    conditions = _normalize_condition_lines(common_conditions or DEFAULT_IMAGE_COMMON_CONDITIONS)
+    if template and template.image_style:
+        template_condition = f"・{template.image_style.strip()}"
+        if template_condition not in conditions:
+            conditions.append(template_condition)
+
+    lines = [
+        f"画像を{count}枚まとめて生成してください。",
+        "",
+        "【共通条件】",
+        "",
+        *conditions,
+        "・画像ごとに違う構図",
+        "・画像ごとに違うカメラアングル",
+        "・画像ごとに違う演出",
+        "・同じ構図にならないようにする",
+        "",
+    ]
+
+    for index in range(count):
+        prompt = prompts[index] if index < len(prompts) else "（画像プロンプト未入力）"
+        lines.extend([
+            "---",
+            "",
+            f"画像{index + 1}",
+            "",
+            prompt,
+            "",
+        ])
+
+    lines.extend([
+        "---",
+        "",
+        f"以上の{count}枚を一度に生成してください。",
+        "",
+        *IMAGE_BATCH_OPTIMIZATION_LINES,
+        "",
+    ])
+    return "\n".join(lines).strip() + "\n"
+
+
+def _normalize_condition_lines(text: str) -> list[str]:
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if not line.startswith(("・", "-", "※")):
+            line = f"・{line}"
+        lines.append(line)
+    return lines or DEFAULT_IMAGE_COMMON_CONDITIONS.splitlines()
+
 
 def build_chatgpt_prompt(
     topic: str,

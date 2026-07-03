@@ -19,6 +19,7 @@ def test_settings_roundtrip(tmp_path) -> None:
     settings.subtitle_position = "中央"
     settings.subtitle_outline = 6
     settings.subtitle_shadow_enabled = False
+    settings.image_common_conditions = "・9:16\n・4K\n・no text"
     service.save(settings)
     loaded = service.load()
     assert loaded.voicevox_speaker_id == 3
@@ -30,3 +31,4 @@ def test_settings_roundtrip(tmp_path) -> None:
     assert loaded.subtitle_position == "中央"
     assert loaded.subtitle_outline == 6
     assert loaded.subtitle_shadow_enabled is False
+    assert loaded.image_common_conditions == "・9:16\n・4K\n・no text"
