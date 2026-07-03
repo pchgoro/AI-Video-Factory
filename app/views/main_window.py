@@ -280,22 +280,27 @@ class MainWindow(QMainWindow):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.addWidget(self._build_wizard_bar())
+        self.next_action_label = QLabel("次に押す場所を青くハイライトします。")
+        self.next_action_label.setStyleSheet("background:#252526; border:1px solid #3c3c3c; border-radius:4px; padding:8px; color:#dcdcaa;")
+        layout.addWidget(self.next_action_label)
         layout.addWidget(self._build_form_box())
 
         action_row = QHBoxLayout()
         buttons = [
-            ("ChatGPTを開く", self.open_chatgpt),
-            ("プロンプト生成", self.generate_prompt),
-            ("プロンプトをコピー", self.copy_prompt),
-            ("画像生成プロンプトをコピー", self.copy_bulk_image_prompt),
-            ("プロジェクト作成", self.create_project),
-            ("VOICEVOX音声生成", self.generate_voice),
-            ("FFmpeg動画生成", self.render_video),
-            ("投稿", self.not_implemented),
+            ("open_chatgpt", "ChatGPTを開く", self.open_chatgpt),
+            ("generate_prompt", "プロンプト生成", self.generate_prompt),
+            ("copy_prompt", "プロンプトをコピー", self.copy_prompt),
+            ("copy_bulk_image_prompt", "画像生成プロンプトをコピー", self.copy_bulk_image_prompt),
+            ("create_project", "プロジェクト作成", self.create_project),
+            ("generate_voice", "VOICEVOX音声生成", self.generate_voice),
+            ("render_video", "FFmpeg動画生成", self.render_video),
+            ("post", "投稿", self.not_implemented),
         ]
-        for label, handler in buttons:
+        self.action_buttons: dict[str, QPushButton] = {}
+        for key, label, handler in buttons:
             button = QPushButton(label)
             button.clicked.connect(handler)
+            self.action_buttons[key] = button
             action_row.addWidget(button)
         action_row.addStretch()
         layout.addLayout(action_row)
@@ -432,19 +437,20 @@ class MainWindow(QMainWindow):
 
     def _build_assets_tab(self) -> QWidget:
         panel = QWidget()
+        self.assets_tab = panel
         layout = QVBoxLayout(panel)
         self.image_drop_area = ImageDropArea(self)
         layout.addWidget(self.image_drop_area)
 
         import_buttons = QHBoxLayout()
-        select_button = QPushButton("画像ファイルを選択")
-        select_button.clicked.connect(self.select_images_for_import)
-        paste_button = QPushButton("Ctrl+V貼り付け")
-        paste_button.clicked.connect(self.paste_images_from_clipboard)
+        self.select_images_button = QPushButton("画像ファイルを選択")
+        self.select_images_button.clicked.connect(self.select_images_for_import)
+        self.paste_images_button = QPushButton("Ctrl+V貼り付け")
+        self.paste_images_button.clicked.connect(self.paste_images_from_clipboard)
         open_images_button = QPushButton("画像フォルダを開く")
         open_images_button.clicked.connect(lambda _checked=False: self.open_project_folder("images"))
-        import_buttons.addWidget(select_button)
-        import_buttons.addWidget(paste_button)
+        import_buttons.addWidget(self.select_images_button)
+        import_buttons.addWidget(self.paste_images_button)
         import_buttons.addWidget(open_images_button)
         import_buttons.addStretch()
         layout.addLayout(import_buttons)
@@ -558,6 +564,8 @@ class MainWindow(QMainWindow):
     def refresh_project_list(self) -> None:
         keyword = self.project_search.text().strip().lower()
         genre = self.genre_filter.currentText()
+        current_path = str(self.current_project.path) if self.current_project else ""
+        self.project_list.blockSignals(True)
         self.project_list.clear()
         for project in self.projects:
             fields = [project.title, project.topic, project.genre, project.posted_date, project.series, " ".join(project.tags), project.name]
@@ -569,6 +577,9 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(self._project_display_name(project))
             item.setData(Qt.UserRole, str(project.path))
             self.project_list.addItem(item)
+            if current_path and str(project.path) == current_path:
+                item.setSelected(True)
+        self.project_list.blockSignals(False)
 
     def refresh_topic_list(self) -> None:
         keyword = self.topic_search.text().strip().lower()
@@ -846,19 +857,87 @@ class MainWindow(QMainWindow):
                 label.setStyleSheet("background:#094771; border:1px solid #3794ff; border-radius:4px; padding:6px; font-weight:700;")
             else:
                 label.setStyleSheet("background:#252526; border:1px solid #3c3c3c; border-radius:4px; padding:6px;")
+        self.update_action_highlights(first_incomplete)
 
     def _wizard_states(self) -> list[bool]:
         progress = self.current_project.progress if self.current_project else {}
         return [
             bool(self.topic_input.text().strip()),
-            bool(self.prompt_text.toPlainText().strip()),
+            bool(self.current_project),
             bool(progress.get("台本")),
             bool(progress.get("画像")),
             bool(progress.get("音声")),
-            bool(progress.get("字幕")),
             bool(progress.get("動画")),
             bool(progress.get("投稿")),
         ]
+
+    def update_action_highlights(self, step_index: int) -> None:
+        self._clear_action_highlights()
+        instructions = [
+            "STEP1: テーマを入力してください。",
+            "STEP2: 「プロンプト生成」→「プロンプトをコピー」→「プロジェクト作成」の順に進めます。",
+            "STEP3: ChatGPTのJSON回答を「JSON回答貼り付け」へ貼り付けます。",
+            "STEP4: 「画像生成プロンプトをコピー」で画像を生成し、素材管理から画像を取り込みます。",
+            "STEP5: 「VOICEVOX音声生成」を押します。",
+            "STEP6: 「FFmpeg動画生成」を押します。",
+            "STEP7: 投稿準備ができています。",
+        ]
+        if hasattr(self, "next_action_label"):
+            self.next_action_label.setText(instructions[min(step_index, len(instructions) - 1)])
+        if step_index == 0:
+            self.topic_input.setStyleSheet(self._highlight_field_style())
+            return
+        if step_index == 1:
+            if self.prompt_text.toPlainText().strip():
+                self._highlight_buttons(["open_chatgpt", "copy_prompt", "create_project"])
+            else:
+                self._highlight_buttons(["generate_prompt"])
+            return
+        if step_index == 2:
+            self.answer_text.setStyleSheet(self._highlight_field_style())
+            self.content_tabs.setCurrentWidget(self.answer_text)
+            return
+        if step_index == 3:
+            self._highlight_buttons(["copy_bulk_image_prompt"])
+            if hasattr(self, "assets_tab"):
+                self.content_tabs.setCurrentWidget(self.assets_tab)
+            if hasattr(self, "select_images_button"):
+                self.select_images_button.setStyleSheet(self._highlight_button_style())
+            if hasattr(self, "paste_images_button"):
+                self.paste_images_button.setStyleSheet(self._highlight_button_style())
+            return
+        if step_index == 4:
+            self._highlight_buttons(["generate_voice"])
+            return
+        if step_index == 5:
+            self._highlight_buttons(["render_video"])
+            return
+        if step_index == 6:
+            self._highlight_buttons(["post"])
+
+    def _clear_action_highlights(self) -> None:
+        for button in getattr(self, "action_buttons", {}).values():
+            button.setStyleSheet("")
+        for widget_name in ["select_images_button", "paste_images_button"]:
+            widget = getattr(self, widget_name, None)
+            if widget:
+                widget.setStyleSheet("")
+        for widget_name in ["topic_input", "answer_text"]:
+            widget = getattr(self, widget_name, None)
+            if widget:
+                widget.setStyleSheet("")
+
+    def _highlight_buttons(self, keys: list[str]) -> None:
+        for key in keys:
+            button = self.action_buttons.get(key)
+            if button:
+                button.setStyleSheet(self._highlight_button_style())
+
+    def _highlight_button_style(self) -> str:
+        return "background:#0e639c; border:2px solid #ffd166; color:#ffffff; font-weight:700;"
+
+    def _highlight_field_style(self) -> str:
+        return "background:#252526; color:#ffffff; border:2px solid #ffd166; border-radius:4px; padding:6px;"
 
     def update_asset_list(self) -> None:
         self.asset_list.clear()
