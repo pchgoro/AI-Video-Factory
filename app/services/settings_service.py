@@ -47,6 +47,12 @@ class SettingsService:
             title_position=data.get("title_position", "上"),
             title_bg_enabled=bool(data.get("title_bg_enabled", True)),
             title_duration=data.get("title_duration", "常に表示"),
+            title_preset=data.get("title_preset", "宇宙ドキュメンタリー風"),
+            title_highlight_enabled=bool(data.get("title_highlight_enabled", True)),
+            title_bg_opacity=int(data.get("title_bg_opacity", 50)),
+            title_padding=int(data.get("title_padding", 15)),
+            title_width_percent=int(data.get("title_width_percent", 90)),
+            title_line_spacing=int(data.get("title_line_spacing", 10)),
             image_common_conditions=data.get(
                 "image_common_conditions",
                 "・9:16\n・4K\n・文字なし\n・リアル\n・映画風\n・ドキュメンタリー風",

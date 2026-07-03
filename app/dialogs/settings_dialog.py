@@ -138,7 +138,7 @@ class SettingsDialog(QDialog):
         form.addRow("タイトルサイズ", self.title_size_box)
 
         self.title_position_box = QComboBox()
-        self.title_position_box.addItems(["上", "中央", "下"])
+        self.title_position_box.addItems(["上", "上（左寄せ）", "中央", "下"])
         self.title_position_box.setCurrentText(settings.title_position)
         form.addRow("タイトル位置", self.title_position_box)
 
@@ -150,6 +150,35 @@ class SettingsDialog(QDialog):
         self.title_duration_box.addItems(["常に表示", "3秒", "5秒", "10秒"])
         self.title_duration_box.setCurrentText(settings.title_duration)
         form.addRow("タイトル表示時間", self.title_duration_box)
+
+        self.title_preset_box = QComboBox()
+        self.title_preset_box.addItems(["宇宙ドキュメンタリー風", "シンプル", "情報番組風", "ニュース風", "インパクト強め"])
+        self.title_preset_box.setCurrentText(getattr(settings, "title_preset", "宇宙ドキュメンタリー風"))
+        form.addRow("タイトルデザインプリセット", self.title_preset_box)
+
+        self.title_highlight_check = QCheckBox("重要語を強調する")
+        self.title_highlight_check.setChecked(getattr(settings, "title_highlight_enabled", True))
+        form.addRow("タイトル強調", self.title_highlight_check)
+
+        self.title_bg_opacity_box = QSpinBox()
+        self.title_bg_opacity_box.setRange(0, 100)
+        self.title_bg_opacity_box.setValue(getattr(settings, "title_bg_opacity", 50))
+        form.addRow("タイトル背景透明度", self.title_bg_opacity_box)
+
+        self.title_padding_box = QSpinBox()
+        self.title_padding_box.setRange(0, 100)
+        self.title_padding_box.setValue(getattr(settings, "title_padding", 15))
+        form.addRow("タイトル余白", self.title_padding_box)
+
+        self.title_width_percent_box = QSpinBox()
+        self.title_width_percent_box.setRange(10, 100)
+        self.title_width_percent_box.setValue(getattr(settings, "title_width_percent", 90))
+        form.addRow("タイトル横幅%", self.title_width_percent_box)
+
+        self.title_line_spacing_box = QSpinBox()
+        self.title_line_spacing_box.setRange(0, 100)
+        self.title_line_spacing_box.setValue(getattr(settings, "title_line_spacing", 10))
+        form.addRow("タイトル行間", self.title_line_spacing_box)
 
         self.image_common_conditions_edit = QTextEdit()
         self.image_common_conditions_edit.setPlainText(settings.image_common_conditions)
@@ -211,6 +240,12 @@ class SettingsDialog(QDialog):
             title_position=self.title_position_box.currentText(),
             title_bg_enabled=self.title_bg_check.isChecked(),
             title_duration=self.title_duration_box.currentText(),
+            title_preset=self.title_preset_box.currentText(),
+            title_highlight_enabled=self.title_highlight_check.isChecked(),
+            title_bg_opacity=self.title_bg_opacity_box.value(),
+            title_padding=self.title_padding_box.value(),
+            title_width_percent=self.title_width_percent_box.value(),
+            title_line_spacing=self.title_line_spacing_box.value(),
             image_common_conditions=self.image_common_conditions_edit.toPlainText().strip()
             or "・9:16\n・4K\n・文字なし\n・リアル\n・映画風\n・ドキュメンタリー風",
         )

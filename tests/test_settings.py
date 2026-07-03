@@ -24,6 +24,12 @@ def test_settings_roundtrip(tmp_path) -> None:
     settings.title_position = "中央"
     settings.title_bg_enabled = False
     settings.title_duration = "5秒"
+    settings.title_preset = "ニュース風"
+    settings.title_highlight_enabled = False
+    settings.title_bg_opacity = 75
+    settings.title_padding = 20
+    settings.title_width_percent = 85
+    settings.title_line_spacing = 15
     settings.image_common_conditions = "・9:16\n・4K\n・no text"
     service.save(settings)
     loaded = service.load()
@@ -41,4 +47,10 @@ def test_settings_roundtrip(tmp_path) -> None:
     assert loaded.title_position == "中央"
     assert loaded.title_bg_enabled is False
     assert loaded.title_duration == "5秒"
+    assert loaded.title_preset == "ニュース風"
+    assert loaded.title_highlight_enabled is False
+    assert loaded.title_bg_opacity == 75
+    assert loaded.title_padding == 20
+    assert loaded.title_width_percent == 85
+    assert loaded.title_line_spacing == 15
     assert loaded.image_common_conditions == "・9:16\n・4K\n・no text"

@@ -98,17 +98,60 @@ class SubtitleService:
         font_size = max(12, int(settings.subtitle_font_size))
         outline = max(0, int(settings.subtitle_outline))
 
-        # Title settings
-        title_border_style = 3 if settings.title_bg_enabled else 1
-        title_back_color = "&H80000000" if settings.title_bg_enabled else "&H00000000"
-        title_outline = 4
+        # Title Preset Defaults
+        preset = getattr(settings, "title_preset", "宇宙ドキュメンタリー風")
+        
+        # Design variables based on preset
         title_font = "Yu Gothic UI"
+        title_color = "&H00FFFFFF"  # White
+        title_outline_color = "&H00000000"  # Black
+        title_border_style = 3 if settings.title_bg_enabled else 1
+        title_size = settings.title_size
+        title_outline = 4
+        
+        # Opacity calculation
+        opacity = getattr(settings, "title_bg_opacity", 50)
+        alpha = max(0, min(255, 255 - int(255 * opacity / 100)))
+        title_back_color = f"&H{alpha:02X}000000"
+        
+        if preset == "シンプル":
+            title_font = "Yu Gothic UI"
+            title_outline = 2
+        elif preset == "情報番組風":
+            title_font = "Yu Gothic UI"
+            title_outline = 4
+        elif preset == "宇宙ドキュメンタリー風":
+            title_font = "Yu Gothic UI"
+            title_color = "&H00FFFFE0"  # Pale Cyan
+            title_outline = 2
+            title_back_color = f"&H{alpha:02X}1A0A00"  # Dark blue-black
+        elif preset == "ニュース風":
+            title_font = "Meiryo"
+            title_outline = 4
+        elif preset == "インパクト強め":
+            title_font = "Meiryo"
+            title_size = int(settings.title_size * 1.2)
+            title_color = "&H0000FFFF"  # Yellow
+            title_outline = 5
+            
+        # Border style is determined by title_bg_enabled checkbox
+        title_border_style = 3 if settings.title_bg_enabled else 1
+            
+        # Apply padding (custom padding adjusts box outline size if bg is enabled)
+        padding = getattr(settings, "title_padding", 15)
+        if title_border_style == 3:
+            title_outline = max(0, padding)
+            
+        # Left/Right margin based on title_width_percent
+        width_percent = getattr(settings, "title_width_percent", 90)
+        margin_lr = max(10, (1080 * (100 - width_percent)) // 200)
+
         title_align, title_margin_v = self._title_alignment_and_margin(settings.title_position)
 
         events = []
         if settings.title_enabled and title_text:
             title_duration_sec = self._parse_title_duration(settings.title_duration, total_duration)
-            formatted_title = self._format_title_ass_text(title_text)
+            formatted_title = self._format_title_ass_text(title_text, preset, settings)
             events.append(
                 f"Dialogue: 1,{self._ass_time(0.0)},{self._ass_time(title_duration_sec)},Title,,0,0,0,,{formatted_title}"
             )
@@ -135,8 +178,8 @@ class SubtitleService:
                 "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
                 f"Style: Default,Yu Gothic,{font_size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,"
                 f"-1,0,0,0,100,100,0,0,1,{outline},{shadow},{alignment},80,80,{margin_v},1",
-                f"Style: Title,{title_font},{settings.title_size},&H00FFFFFF,&H00FFFFFF,&H00000000,{title_back_color},"
-                f"-1,0,0,0,100,100,0,0,{title_border_style},{title_outline},0,{title_align},80,80,{title_margin_v},1",
+                f"Style: Title,{title_font},{title_size},{title_color},&H00FFFFFF,{title_outline_color},{title_back_color},"
+                f"-1,0,0,0,100,100,0,0,{title_border_style},{title_outline},0,{title_align},{margin_lr},{margin_lr},{title_margin_v},1",
                 "",
                 "[Events]",
                 "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -172,14 +215,49 @@ class SubtitleService:
         second = text[middle:]
         return f"{first}\n{second}"
 
-    def _format_title_ass_text(self, text: str) -> str:
+    def _format_title_ass_text(self, text: str, preset: str, settings: AppSettings) -> str:
+        # 1. Wrap the title
         wrapped = self._wrap_title(text)
-        clean = wrapped.replace("\r\n", "\n").replace("\r", "\n")
-        clean = clean.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}")
-        lines = [line.strip() for line in clean.splitlines() if line.strip()]
-        return r"\N".join(lines[:2])
+        
+        # 2. Escape ASS special characters in user text
+        escaped = wrapped.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}")
+        
+        # 3. Apply keyword highlighting
+        highlight_enabled = getattr(settings, "title_highlight_enabled", True)
+        if highlight_enabled:
+            highlight_color = "0000FFFF"  # Yellow BGR
+            if preset == "宇宙ドキュメンタリー風":
+                highlight_color = "0080FFFF"  # Light Orange/Yellow
+            elif preset == "インパクト強め":
+                highlight_color = "00FFFFFF"  # White
+            
+            title_size = getattr(settings, "title_size", 72)
+            highlight_size = int(title_size * 1.15)
+            if preset == "インパクト強め":
+                highlight_size = int(title_size * 1.3)
+            
+            import re
+            formatted = re.sub(
+                r"【([\s\S]*?)】",
+                rf"{{\\c&H{highlight_color}&}}{{\\fs{highlight_size}}}{{\\b1}}\1{{\\r}}",
+                escaped
+            )
+        else:
+            formatted = escaped.replace("【", "").replace("】", "")
+            
+        lines = [line.strip() for line in formatted.splitlines() if line.strip()]
+        
+        # 4. Add decoration lines if preset is "情報番組風" or "インパクト強め"
+        if preset in ("情報番組風", "インパクト強め"):
+            dec_line = "━━━━━━━━━━━━"
+            lines.insert(0, dec_line)
+            lines.append(dec_line)
+            
+        return r"\N".join(lines[:4])
 
     def _title_alignment_and_margin(self, position: str) -> tuple[int, int]:
+        if "左寄せ" in position or "左" in position:
+            return 7, 170
         if position == "上":
             return 8, 170
         if position == "中央":

@@ -37,6 +37,12 @@ class AppSettings:
     title_position: str = "上"
     title_bg_enabled: bool = True
     title_duration: str = "常に表示"
+    title_preset: str = "宇宙ドキュメンタリー風"
+    title_highlight_enabled: bool = True
+    title_bg_opacity: int = 50
+    title_padding: int = 15
+    title_width_percent: int = 90
+    title_line_spacing: int = 10
     image_common_conditions: str = "・9:16\n・4K\n・文字なし\n・リアル\n・映画風\n・ドキュメンタリー風"
 
 

@@ -144,11 +144,100 @@ def test_title_overlay_duration_and_position(tmp_path) -> None:
     # Position: "中央" -> Alignment=5, MarginV=0
     assert "Style: Title," in ass
     assert "Yu Gothic UI," in ass
-    assert ",5,80,80,0,1" in ass  # Alignment=5, MarginV=0
-    # Background disabled: BorderStyle=1, BackColour=&H00000000
-    assert ",1,4,0,5" in ass  # BorderStyle=1, Outline=4, Shadow=0, Alignment=5
-    assert "&H00000000" in ass
+    assert ",5,54,54,0,1" in ass  # Alignment=5, MarginV=0
+    # Background disabled: BorderStyle=1
+    assert ",1,2,0,5" in ass  # BorderStyle=1, Outline=2, Shadow=0
     
     # Duration: 5 seconds -> end time 0:00:05.00
     assert "0:00:00.00,0:00:05.00,Title" in ass
+
+
+def test_title_overlay_presets(tmp_path) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "title.txt").write_text("🔴⚠️🌌タイトル✅❓", encoding="utf-8")
+    (project_dir / "subtitles.txt").write_text("", encoding="utf-8")
+    
+    # 1. Space documentary style (宇宙ドキュメンタリー風) - Default
+    settings = AppSettings(
+        title_enabled=True,
+        subtitles_enabled=False,
+        title_preset="宇宙ドキュメンタリー風",
+        title_bg_opacity=60,
+        title_width_percent=85,
+        title_position="上（左寄せ）"
+    )
+    path = SubtitleService().generate_for_project(project_dir, settings)
+    ass = path.read_text(encoding="utf-8")
+    assert "Style: Title,Yu Gothic UI," in ass
+    assert "&H00FFFFE0" in ass  # Light Cyan color
+    assert "&H661A0A00" in ass  # BGR background color with 60% opacity (alpha = 255 - 153 = 102 = 66 hex)
+    assert ",7," in ass  # Left-aligned (Alignment=7)
+    assert ",81,81," in ass  # Left/Right margin based on 85% width: (1080 * 15) // 200 = 81
+    assert "🔴⚠️🌌タイトル✅❓" in ass  # Emojis preserved and didn't crash
+    
+    # 2. Information show style (情報番組風) with decoration lines
+    settings = AppSettings(
+        title_enabled=True,
+        subtitles_enabled=False,
+        title_preset="情報番組風",
+        title_bg_opacity=50
+    )
+    path = SubtitleService().generate_for_project(project_dir, settings)
+    ass = path.read_text(encoding="utf-8")
+    assert "━━━━━━━━━━━━" in ass  # Lines added
+    assert "&H80000000" in ass  # 50% opacity black
+    
+    # 3. High impact style (インパクト強め) with decoration lines, larger size
+    settings = AppSettings(
+        title_enabled=True,
+        subtitles_enabled=False,
+        title_preset="インパクト強め",
+        title_size=60
+    )
+    path = SubtitleService().generate_for_project(project_dir, settings)
+    ass = path.read_text(encoding="utf-8")
+    assert "Style: Title,Meiryo,72" in ass  # 60 * 1.2 = 72
+    assert "&H0000FFFF" in ass  # Yellow
+    
+    # 4. News style (ニュース風)
+    settings = AppSettings(
+        title_enabled=True,
+        subtitles_enabled=False,
+        title_preset="ニュース風",
+        title_bg_opacity=100
+    )
+    path = SubtitleService().generate_for_project(project_dir, settings)
+    ass = path.read_text(encoding="utf-8")
+    assert "Style: Title,Meiryo," in ass
+    assert "&H00000000" in ass  # 100% opacity (alpha = 00 hex)
+
+
+def test_title_overlay_highlighting(tmp_path) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "title.txt").write_text("【ブラックホール】に落ちると？", encoding="utf-8")
+    (project_dir / "subtitles.txt").write_text("", encoding="utf-8")
+    
+    # Highlight Enabled (Default)
+    settings = AppSettings(
+        title_enabled=True,
+        subtitles_enabled=False,
+        title_preset="宇宙ドキュメンタリー風",
+        title_size=70,
+        title_highlight_enabled=True
+    )
+    path = SubtitleService().generate_for_project(project_dir, settings)
+    ass = path.read_text(encoding="utf-8")
+    # Should contain color and size tag for highlighted word, then \r reset
+    assert r"{\c&H0080FFFF&}{\fs80}{\b1}ブラックホー\Nル{\r}に落ちると？" in ass
+    
+    # Highlight Disabled
+    settings.title_highlight_enabled = False
+    path = SubtitleService().generate_for_project(project_dir, settings)
+    ass = path.read_text(encoding="utf-8")
+    # Brackets stripped, no tags, but still wrapped
+    assert r"ブラックホー\Nルに落ちると？" in ass
+    assert r"\c&H" not in ass
+
 
