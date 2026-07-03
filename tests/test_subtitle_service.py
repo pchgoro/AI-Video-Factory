@@ -53,6 +53,13 @@ def test_subtitle_settings_are_reflected() -> None:
     assert ",1,8,0,8,80,80,120,1" in ass
 
 
+def test_default_subtitle_position_uses_short_safe_area() -> None:
+    cue = SubtitleService().parse_subtitles('[{"start":0,"end":2,"text":"安全位置の字幕"}]')[0]
+    ass = SubtitleService().build_ass([cue], AppSettings(subtitle_position="下"))
+
+    assert ",2,80,80,720,1" in ass
+
+
 def test_subtitles_auto_split() -> None:
     # A single very long cue should be split
     text = '[{"start": 0.0, "end": 10.0, "text": "私たちは、その光を観測することでブラックホールの存在を知っています。そして中心には『特異点』と呼ばれる場所があると考えられていますが、そこで何が起きているのかは、今の科学でも説明できません。"}]'
@@ -239,5 +246,4 @@ def test_title_overlay_highlighting(tmp_path) -> None:
     # Brackets stripped, no tags, but still wrapped
     assert r"ブラックホー\Nルに落ちると？" in ass
     assert r"\c&H" not in ass
-
 

@@ -316,7 +316,7 @@ class SubtitleService:
             return 8, 120
         if position == "中央":
             return 5, 0
-        return 2, 160
+        return 2, 720
 
     def _ass_time(self, seconds: float) -> str:
         centiseconds = max(0, int(round(seconds * 100)))
