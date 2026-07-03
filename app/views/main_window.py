@@ -5,12 +5,13 @@ import logging
 import re
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QStringListModel, QUrl
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import QSize, Qt, QTimer, QStringListModel, QUrl
+from PySide6.QtGui import QGuiApplication, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QCompleter,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QGroupBox,
@@ -46,6 +47,7 @@ from config import AppPaths
 from dialogs.settings_dialog import SettingsDialog
 from models import DEFAULT_DURATIONS, PROGRESS_ITEMS, ProjectInfo, PromptTemplate, WIZARD_STEPS
 from services.dashboard_service import DashboardService
+from services.image_import_service import ImageImportError, ImageImportService
 from services.parser import ChatGptAnswerParser, ChatGptParseError
 from services.project_service import ProjectService
 from services.prompt_builder import build_bulk_image_prompt, build_chatgpt_prompt
@@ -72,6 +74,36 @@ QTabBar::tab { background: #252526; color: #d4d4d4; padding: 8px 12px; border: 1
 QTabBar::tab:selected { background: #1e1e1e; border-bottom-color: #1e1e1e; }
 QSplitter::handle { background: #333333; }
 """
+
+
+class ImageDropArea(QLabel):
+    """画像ファイルを受け取るドラッグ＆ドロップ領域です。"""
+
+    def __init__(self, parent: "MainWindow") -> None:
+        super().__init__("ここに画像をドラッグ＆ドロップ\nまたは Ctrl+V で貼り付け")
+        self.main_window = parent
+        self.setAcceptDrops(True)
+        self.setAlignment(Qt.AlignCenter)
+        self.setMinimumHeight(110)
+        self.setStyleSheet("border: 2px dashed #5a5a5a; border-radius: 6px; color: #cfcfcf;")
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dropEvent(self, event) -> None:
+        files = [
+            Path(url.toLocalFile())
+            for url in event.mimeData().urls()
+            if url.isLocalFile()
+        ]
+        if files:
+            self.main_window.import_image_files(files)
+            event.acceptProposedAction()
+            return
+        event.ignore()
 
 
 class MainWindow(QMainWindow):
@@ -101,6 +133,7 @@ class MainWindow(QMainWindow):
         self.version_info = version_info or {}
         self.logger = logging.getLogger("ai_video_factory")
         self.parser = ChatGptAnswerParser()
+        self.image_import_service = ImageImportService()
         self.settings = settings_service.load()
         self.current_project: ProjectInfo | None = None
         self.projects: list[ProjectInfo] = []
@@ -122,6 +155,13 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._load_initial_data()
+
+    def keyPressEvent(self, event) -> None:
+        focus_widget = self.focusWidget()
+        if event.matches(QKeySequence.Paste) and not isinstance(focus_widget, (QLineEdit, QTextEdit)):
+            self.paste_images_from_clipboard()
+            return
+        super().keyPressEvent(event)
 
     def _build_ui(self) -> None:
         root = QSplitter(Qt.Horizontal)
@@ -393,9 +433,35 @@ class MainWindow(QMainWindow):
     def _build_assets_tab(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
+        self.image_drop_area = ImageDropArea(self)
+        layout.addWidget(self.image_drop_area)
+
+        import_buttons = QHBoxLayout()
+        select_button = QPushButton("画像ファイルを選択")
+        select_button.clicked.connect(self.select_images_for_import)
+        paste_button = QPushButton("Ctrl+V貼り付け")
+        paste_button.clicked.connect(self.paste_images_from_clipboard)
+        open_images_button = QPushButton("画像フォルダを開く")
+        open_images_button.clicked.connect(lambda _checked=False: self.open_project_folder("images"))
+        import_buttons.addWidget(select_button)
+        import_buttons.addWidget(paste_button)
+        import_buttons.addWidget(open_images_button)
+        import_buttons.addStretch()
+        layout.addLayout(import_buttons)
+
+        layout.addWidget(QLabel("取り込み済み画像"))
+        self.image_thumbnail_scroll = QScrollArea()
+        self.image_thumbnail_scroll.setWidgetResizable(True)
+        self.image_thumbnail_container = QWidget()
+        self.image_thumbnail_layout = QVBoxLayout(self.image_thumbnail_container)
+        self.image_thumbnail_layout.addStretch()
+        self.image_thumbnail_scroll.setWidget(self.image_thumbnail_container)
+        layout.addWidget(self.image_thumbnail_scroll, stretch=2)
+
+        layout.addWidget(QLabel("素材一覧"))
         self.asset_list = QListWidget()
         self.asset_list.itemDoubleClicked.connect(self.open_asset_folder)
-        layout.addWidget(self.asset_list)
+        layout.addWidget(self.asset_list, stretch=1)
         return panel
 
     def _build_video_preview_tab(self) -> QWidget:
@@ -797,11 +863,164 @@ class MainWindow(QMainWindow):
     def update_asset_list(self) -> None:
         self.asset_list.clear()
         if self.current_project is None:
+            self.update_image_thumbnail_list()
             return
         for label, status, path in self.project_service.asset_statuses(self.current_project):
             item = QListWidgetItem(f"{label}    {status}")
             item.setData(Qt.UserRole, str(path))
             self.asset_list.addItem(item)
+        self.update_image_thumbnail_list()
+
+    def select_images_for_import(self) -> None:
+        if self.current_project is None:
+            QMessageBox.warning(self, "画像取り込みエラー", "先にプロジェクトを作成、または選択してください。")
+            return
+        files, _selected_filter = QFileDialog.getOpenFileNames(
+            self,
+            "取り込む画像を選択",
+            str(self.current_project.path),
+            "画像ファイル (*.png *.jpg *.jpeg *.webp)",
+        )
+        if files:
+            self.import_image_files([Path(file) for file in files])
+
+    def import_image_files(self, files: list[Path]) -> None:
+        if self.current_project is None:
+            QMessageBox.warning(self, "画像取り込みエラー", "先にプロジェクトを作成、または選択してください。")
+            return
+        mode = self._confirm_image_import_mode()
+        if mode is None:
+            return
+        try:
+            imported = self.image_import_service.import_files(self.current_project.path, files, mode)
+        except ImageImportError as exc:
+            QMessageBox.warning(self, "画像取り込みエラー", str(exc))
+            return
+        self._refresh_after_image_change()
+        self.status_label.setText(f"{len(imported)}枚の画像を取り込みました。")
+
+    def paste_images_from_clipboard(self) -> None:
+        if self.current_project is None:
+            QMessageBox.warning(self, "画像貼り付けエラー", "先にプロジェクトを作成、または選択してください。")
+            return
+        mime_data = QGuiApplication.clipboard().mimeData()
+        if not mime_data.hasUrls() and not mime_data.hasImage():
+            QMessageBox.warning(self, "画像貼り付けエラー", "クリップボードに画像がありません。")
+            return
+        mode = self._confirm_image_import_mode()
+        if mode is None:
+            return
+        try:
+            if mime_data.hasUrls():
+                files = [Path(url.toLocalFile()) for url in mime_data.urls() if url.isLocalFile()]
+                if not files:
+                    QMessageBox.warning(self, "画像貼り付けエラー", "クリップボードに画像がありません。")
+                    return
+                imported = self.image_import_service.import_files(self.current_project.path, files, mode)
+                count = len(imported)
+            elif mime_data.hasImage():
+                image = QGuiApplication.clipboard().image()
+                self.image_import_service.import_qimage(self.current_project.path, image, mode)
+                count = 1
+            else:
+                QMessageBox.warning(self, "画像貼り付けエラー", "クリップボードに画像がありません。")
+                return
+        except ImageImportError as exc:
+            QMessageBox.warning(self, "画像貼り付けエラー", str(exc))
+            return
+        self._refresh_after_image_change()
+        self.status_label.setText(f"{count}枚の画像を貼り付けました。")
+
+    def _confirm_image_import_mode(self) -> str | None:
+        if self.current_project is None:
+            return None
+        if not self.image_import_service.has_images(self.current_project.path):
+            return "add"
+        message = QMessageBox(self)
+        message.setWindowTitle("画像取り込み")
+        message.setText("既存画像があります。上書きしますか？")
+        overwrite_button = message.addButton("上書きする", QMessageBox.AcceptRole)
+        add_button = message.addButton("追加する", QMessageBox.ActionRole)
+        cancel_button = message.addButton("キャンセル", QMessageBox.RejectRole)
+        message.exec()
+        clicked = message.clickedButton()
+        if clicked == overwrite_button:
+            return "overwrite"
+        if clicked == add_button:
+            return "add"
+        if clicked == cancel_button:
+            return None
+        return None
+
+    def update_image_thumbnail_list(self) -> None:
+        while self.image_thumbnail_layout.count() > 1:
+            item = self.image_thumbnail_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        if self.current_project is None:
+            return
+        for image_path in self.image_import_service.list_images(self.current_project.path):
+            self.image_thumbnail_layout.insertWidget(
+                self.image_thumbnail_layout.count() - 1,
+                self._image_thumbnail_row(image_path),
+            )
+
+    def _image_thumbnail_row(self, image_path: Path) -> QWidget:
+        row = QFrame()
+        row.setFrameShape(QFrame.StyledPanel)
+        layout = QHBoxLayout(row)
+        preview = QLabel()
+        preview.setFixedSize(QSize(96, 150))
+        pixmap = QPixmap(str(image_path))
+        if not pixmap.isNull():
+            preview.setPixmap(pixmap.scaled(preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        preview.setAlignment(Qt.AlignCenter)
+        layout.addWidget(preview)
+
+        name_label = QLabel(image_path.name)
+        name_label.setMinimumWidth(90)
+        layout.addWidget(name_label)
+
+        up_button = QPushButton("上へ")
+        up_button.clicked.connect(lambda _checked=False, path=image_path: self.move_imported_image(path, -1))
+        down_button = QPushButton("下へ")
+        down_button.clicked.connect(lambda _checked=False, path=image_path: self.move_imported_image(path, 1))
+        delete_button = QPushButton("削除")
+        delete_button.clicked.connect(lambda _checked=False, path=image_path: self.delete_imported_image(path))
+        layout.addWidget(up_button)
+        layout.addWidget(down_button)
+        layout.addWidget(delete_button)
+        layout.addStretch()
+        return row
+
+    def move_imported_image(self, image_path: Path, direction: int) -> None:
+        try:
+            self.image_import_service.move_image(image_path, direction)
+        except OSError as exc:
+            QMessageBox.warning(self, "画像順番変更エラー", f"画像の順番変更に失敗しました。\n{exc}")
+            return
+        self._refresh_after_image_change()
+        self.status_label.setText("画像の順番を変更しました。")
+
+    def delete_imported_image(self, image_path: Path) -> None:
+        try:
+            self.image_import_service.delete_image(image_path)
+        except OSError as exc:
+            QMessageBox.warning(self, "画像削除エラー", f"画像の削除に失敗しました。\n{exc}")
+            return
+        self._refresh_after_image_change()
+        self.status_label.setText(f"{image_path.name} を削除しました。")
+
+    def _refresh_after_image_change(self) -> None:
+        if self.current_project is None:
+            return
+        self.current_project = self.project_service.load_project(self.current_project.path)
+        self.update_progress_view()
+        self.update_asset_list()
+        self.update_image_prompt_list()
+        self.update_wizard()
+        self.reload_projects()
 
     def update_image_prompt_list(self) -> None:
         while self.image_prompt_layout.count() > 1:
