@@ -521,7 +521,18 @@ class MainWindow(QMainWindow):
         imported_images_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         imported_images_layout = QVBoxLayout(imported_images_panel)
         imported_images_layout.setContentsMargins(0, 0, 0, 0)
-        imported_images_layout.addWidget(QLabel("取り込み済み画像"))
+        imported_images_header = QHBoxLayout()
+        imported_images_header.addWidget(QLabel("取り込み済み画像"))
+        imported_images_header.addStretch()
+        imported_images_header.addWidget(QLabel("高さ"))
+        self.image_thumbnail_height_box = QSpinBox()
+        self.image_thumbnail_height_box.setRange(120, 1200)
+        self.image_thumbnail_height_box.setSingleStep(40)
+        self.image_thumbnail_height_box.setValue(420)
+        self.image_thumbnail_height_box.setSuffix(" px")
+        self.image_thumbnail_height_box.valueChanged.connect(self.set_image_thumbnail_area_height)
+        imported_images_header.addWidget(self.image_thumbnail_height_box)
+        imported_images_layout.addLayout(imported_images_header)
         self.image_thumbnail_scroll = QScrollArea()
         self.image_thumbnail_scroll.setWidgetResizable(True)
         self.image_thumbnail_scroll.setMinimumHeight(60)
@@ -551,6 +562,7 @@ class MainWindow(QMainWindow):
         self.assets_splitter.addWidget(asset_list_panel)
         self.assets_splitter.setSizes([420, 180])
         layout.addWidget(self.assets_splitter, stretch=1)
+        self.set_image_thumbnail_area_height(self.image_thumbnail_height_box.value())
         return panel
 
     def _build_video_preview_tab(self) -> QWidget:
@@ -574,6 +586,14 @@ class MainWindow(QMainWindow):
         controls.addStretch()
         layout.addLayout(controls)
         return panel
+
+    def set_image_thumbnail_area_height(self, height: int) -> None:
+        if not hasattr(self, "image_thumbnail_scroll"):
+            return
+        self.image_thumbnail_scroll.setMinimumHeight(height)
+        self.image_thumbnail_scroll.setMaximumHeight(height)
+        if hasattr(self, "assets_splitter"):
+            self.assets_splitter.setSizes([height + 40, 180])
 
     def _build_progress_box(self) -> QGroupBox:
         box = QGroupBox("進捗状況")
