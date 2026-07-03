@@ -197,7 +197,7 @@ class MainWindow(QMainWindow):
 
         self.project_list = QListWidget()
         self.project_list.itemSelectionChanged.connect(self.load_selected_project)
-        layout.addWidget(self.project_list, stretch=2)
+        project_list_widget = self.project_list
 
         topic_box = QGroupBox("一括ネタ管理")
         topic_layout = QVBoxLayout(topic_box)
@@ -244,7 +244,13 @@ class MainWindow(QMainWindow):
             memo_layout.addLayout(row)
             self.memo_edits.append(memo_edit)
         topic_layout.addWidget(memo_box)
-        layout.addWidget(topic_box, stretch=1)
+        self.left_content_splitter = QSplitter(Qt.Vertical)
+        self.left_content_splitter.setHandleWidth(8)
+        self.left_content_splitter.setChildrenCollapsible(False)
+        self.left_content_splitter.addWidget(project_list_widget)
+        self.left_content_splitter.addWidget(topic_box)
+        self.left_content_splitter.setSizes([260, 420])
+        layout.addWidget(self.left_content_splitter, stretch=1)
         return panel
 
     def _build_main_tabs(self) -> QTabWidget:
@@ -496,19 +502,33 @@ class MainWindow(QMainWindow):
         import_buttons.addStretch()
         layout.addLayout(import_buttons)
 
-        layout.addWidget(QLabel("取り込み済み画像"))
+        imported_images_panel = QWidget()
+        imported_images_layout = QVBoxLayout(imported_images_panel)
+        imported_images_layout.setContentsMargins(0, 0, 0, 0)
+        imported_images_layout.addWidget(QLabel("取り込み済み画像"))
         self.image_thumbnail_scroll = QScrollArea()
         self.image_thumbnail_scroll.setWidgetResizable(True)
         self.image_thumbnail_container = QWidget()
         self.image_thumbnail_layout = QVBoxLayout(self.image_thumbnail_container)
         self.image_thumbnail_layout.addStretch()
         self.image_thumbnail_scroll.setWidget(self.image_thumbnail_container)
-        layout.addWidget(self.image_thumbnail_scroll, stretch=2)
+        imported_images_layout.addWidget(self.image_thumbnail_scroll)
 
-        layout.addWidget(QLabel("素材一覧"))
+        asset_list_panel = QWidget()
+        asset_list_layout = QVBoxLayout(asset_list_panel)
+        asset_list_layout.setContentsMargins(0, 0, 0, 0)
+        asset_list_layout.addWidget(QLabel("素材一覧"))
         self.asset_list = QListWidget()
         self.asset_list.itemDoubleClicked.connect(self.open_asset_folder)
-        layout.addWidget(self.asset_list, stretch=1)
+        asset_list_layout.addWidget(self.asset_list)
+
+        self.assets_splitter = QSplitter(Qt.Vertical)
+        self.assets_splitter.setHandleWidth(8)
+        self.assets_splitter.setChildrenCollapsible(False)
+        self.assets_splitter.addWidget(imported_images_panel)
+        self.assets_splitter.addWidget(asset_list_panel)
+        self.assets_splitter.setSizes([420, 180])
+        layout.addWidget(self.assets_splitter, stretch=1)
         return panel
 
     def _build_video_preview_tab(self) -> QWidget:
