@@ -79,3 +79,76 @@ def test_subtitles_auto_wrap() -> None:
     
     # It should have a line break \N in the dialogue event
     assert r"とても小さな場所に大量の\N重さが集まった天体です。" in ass
+
+
+def test_title_overlay_missing_file(tmp_path) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    
+    settings = AppSettings(title_enabled=True, subtitles_enabled=False)
+    # title.txt doesn't exist
+    with pytest.raises(SubtitleError, match="title.txt が見つかりません。"):
+        SubtitleService().generate_for_project(project_dir, settings)
+
+
+def test_title_overlay_empty_file(tmp_path) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "title.txt").write_text("", encoding="utf-8")
+    
+    settings = AppSettings(title_enabled=True, subtitles_enabled=False)
+    with pytest.raises(SubtitleError, match="タイトルが空です。"):
+        SubtitleService().generate_for_project(project_dir, settings)
+
+
+def test_title_overlay_generation(tmp_path) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    # A long title (> 14 chars) should wrap
+    (project_dir / "title.txt").write_text("ブラックホールは宇宙最大の謎である", encoding="utf-8")
+    (project_dir / "subtitles.txt").write_text("", encoding="utf-8")
+    
+    settings = AppSettings(title_enabled=True, subtitles_enabled=False, title_size=72, title_position="上")
+    path = SubtitleService().generate_for_project(project_dir, settings)
+    
+    assert path == project_dir / "video" / "subtitles.ass"
+    ass = path.read_text(encoding="utf-8")
+    
+    # Check style and formatting
+    assert "Style: Title,Yu Gothic UI,72," in ass
+    assert "170,1" in ass  # MarginV=170 for "上"
+    
+    # Check dialog event and wrap (17 chars: "ブラックホールは宇宙最大の謎である" -> "ブラックホールは\N宇宙最大の謎である")
+    assert r"Dialogue: 1," in ass
+    assert r"Title,,0,0,0,,ブラックホールは\N宇宙最大の謎である" in ass
+
+
+def test_title_overlay_duration_and_position(tmp_path) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "title.txt").write_text("動画タイトル", encoding="utf-8")
+    (project_dir / "subtitles.txt").write_text('[{"start": 0.0, "end": 8.0, "text": "字幕"}]', encoding="utf-8")
+    
+    # 5 seconds duration, "中央" position, transparent bg
+    settings = AppSettings(
+        title_enabled=True,
+        subtitles_enabled=True,
+        title_position="中央",
+        title_bg_enabled=False,
+        title_duration="5秒"
+    )
+    
+    path = SubtitleService().generate_for_project(project_dir, settings)
+    ass = path.read_text(encoding="utf-8")
+    
+    # Position: "中央" -> Alignment=5, MarginV=0
+    assert "Style: Title," in ass
+    assert "Yu Gothic UI," in ass
+    assert ",5,80,80,0,1" in ass  # Alignment=5, MarginV=0
+    # Background disabled: BorderStyle=1, BackColour=&H00000000
+    assert ",1,4,0,5" in ass  # BorderStyle=1, Outline=4, Shadow=0, Alignment=5
+    assert "&H00000000" in ass
+    
+    # Duration: 5 seconds -> end time 0:00:05.00
+    assert "0:00:00.00,0:00:05.00,Title" in ass
+

@@ -42,6 +42,11 @@ class SettingsService:
             subtitle_position=data.get("subtitle_position", "下"),
             subtitle_outline=int(data.get("subtitle_outline", 4)),
             subtitle_shadow_enabled=bool(data.get("subtitle_shadow_enabled", True)),
+            title_enabled=bool(data.get("title_enabled", False)),
+            title_size=int(data.get("title_size", 72)),
+            title_position=data.get("title_position", "上"),
+            title_bg_enabled=bool(data.get("title_bg_enabled", True)),
+            title_duration=data.get("title_duration", "常に表示"),
             image_common_conditions=data.get(
                 "image_common_conditions",
                 "・9:16\n・4K\n・文字なし\n・リアル\n・映画風\n・ドキュメンタリー風",

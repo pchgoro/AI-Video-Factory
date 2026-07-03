@@ -19,6 +19,11 @@ def test_settings_roundtrip(tmp_path) -> None:
     settings.subtitle_position = "中央"
     settings.subtitle_outline = 6
     settings.subtitle_shadow_enabled = False
+    settings.title_enabled = True
+    settings.title_size = 80
+    settings.title_position = "中央"
+    settings.title_bg_enabled = False
+    settings.title_duration = "5秒"
     settings.image_common_conditions = "・9:16\n・4K\n・no text"
     service.save(settings)
     loaded = service.load()
@@ -31,4 +36,9 @@ def test_settings_roundtrip(tmp_path) -> None:
     assert loaded.subtitle_position == "中央"
     assert loaded.subtitle_outline == 6
     assert loaded.subtitle_shadow_enabled is False
+    assert loaded.title_enabled is True
+    assert loaded.title_size == 80
+    assert loaded.title_position == "中央"
+    assert loaded.title_bg_enabled is False
+    assert loaded.title_duration == "5秒"
     assert loaded.image_common_conditions == "・9:16\n・4K\n・no text"

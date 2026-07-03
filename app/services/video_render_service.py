@@ -18,7 +18,7 @@ class VideoRenderService:
     def render_project(self, project: ProjectInfo) -> VideoEditResult:
         bgm_path = self._find_bgm_file(self._bgm_dir_for_project(project.path))
         subtitles_path = None
-        if self.settings.subtitles_enabled:
+        if self.settings.subtitles_enabled or self.settings.title_enabled:
             try:
                 subtitles_path = self.subtitle_service.generate_for_project(project.path, self.settings)
             except SubtitleError as exc:

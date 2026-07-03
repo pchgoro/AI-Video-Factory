@@ -24,19 +24,44 @@ class SubtitleService:
     """ChatGPTの時間付き字幕をASS字幕ファイルへ変換します。"""
 
     def generate_for_project(self, project_dir: Path, settings: AppSettings) -> Path | None:
+        title_text = ""
+        if settings.title_enabled:
+            title_file = project_dir / "title.txt"
+            if not title_file.exists():
+                raise SubtitleError("title.txt が見つかりません。")
+            title_text = self._read_text(title_file).strip()
+            if not title_text:
+                raise SubtitleError("タイトルが空です。")
+
         subtitle_text = self._read_text(project_dir / "subtitles.txt").strip()
-        if not subtitle_text:
+        cues = []
+        if settings.subtitles_enabled and subtitle_text:
+            cues = self.parse_subtitles(subtitle_text)
+
+        if not settings.title_enabled and not cues:
             return None
 
-        cues = self.parse_subtitles(subtitle_text)
-        if not cues:
-            return None
+        # Determine total duration
+        total_duration = 30.0
+        if cues:
+            total_duration = max(cue.end for cue in cues)
+        else:
+            audio_file = project_dir / "audio" / "voice.wav"
+            if audio_file.exists():
+                try:
+                    import wave
+                    with wave.open(str(audio_file), "rb") as w:
+                        total_duration = w.getnframes() / w.getframerate()
+                except Exception:
+                    pass
+        if total_duration <= 0:
+            total_duration = 60.0
 
         video_dir = project_dir / "video"
         video_dir.mkdir(parents=True, exist_ok=True)
         output_path = video_dir / "subtitles.ass"
         try:
-            output_path.write_text(self.build_ass(cues, settings), encoding="utf-8")
+            output_path.write_text(self.build_ass_with_title(cues, title_text, total_duration, settings), encoding="utf-8")
         except OSError as exc:
             raise SubtitleError(f"subtitles.ass の生成に失敗しました。\n{exc}") from exc
         return output_path
@@ -62,16 +87,38 @@ class SubtitleService:
         return self._split_long_cues(cues)
 
     def build_ass(self, cues: list[SubtitleCue], settings: AppSettings) -> str:
+        import dataclasses
+        legacy_settings = dataclasses.replace(settings, title_enabled=False)
+        return self.build_ass_with_title(cues, "", 0.0, legacy_settings)
+
+    def build_ass_with_title(self, cues: list[SubtitleCue], title_text: str, total_duration: float, settings: AppSettings) -> str:
+        # Subtitles settings
         alignment, margin_v = self._alignment_and_margin(settings.subtitle_position)
         shadow = 2 if settings.subtitle_shadow_enabled else 0
         font_size = max(12, int(settings.subtitle_font_size))
         outline = max(0, int(settings.subtitle_outline))
 
-        events = [
-            f"Dialogue: 0,{self._ass_time(cue.start)},{self._ass_time(cue.end)},Default,,0,0,0,,{self._ass_text(cue.text)}"
-            for cue in cues
-            if cue.text.strip() and cue.end > cue.start
-        ]
+        # Title settings
+        title_border_style = 3 if settings.title_bg_enabled else 1
+        title_back_color = "&H80000000" if settings.title_bg_enabled else "&H00000000"
+        title_outline = 4
+        title_font = "Yu Gothic UI"
+        title_align, title_margin_v = self._title_alignment_and_margin(settings.title_position)
+
+        events = []
+        if settings.title_enabled and title_text:
+            title_duration_sec = self._parse_title_duration(settings.title_duration, total_duration)
+            formatted_title = self._format_title_ass_text(title_text)
+            events.append(
+                f"Dialogue: 1,{self._ass_time(0.0)},{self._ass_time(title_duration_sec)},Title,,0,0,0,,{formatted_title}"
+            )
+
+        if settings.subtitles_enabled:
+            for cue in cues:
+                if cue.text.strip() and cue.end > cue.start:
+                    events.append(
+                        f"Dialogue: 0,{self._ass_time(cue.start)},{self._ass_time(cue.end)},Default,,0,0,0,,{self._ass_text(cue.text)}"
+                    )
 
         return "\n".join(
             [
@@ -88,6 +135,8 @@ class SubtitleService:
                 "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
                 f"Style: Default,Yu Gothic,{font_size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,"
                 f"-1,0,0,0,100,100,0,0,1,{outline},{shadow},{alignment},80,80,{margin_v},1",
+                f"Style: Title,{title_font},{settings.title_size},&H00FFFFFF,&H00FFFFFF,&H00000000,{title_back_color},"
+                f"-1,0,0,0,100,100,0,0,{title_border_style},{title_outline},0,{title_align},80,80,{title_margin_v},1",
                 "",
                 "[Events]",
                 "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -95,6 +144,56 @@ class SubtitleService:
                 "",
             ]
         )
+
+    def _wrap_title(self, text: str) -> str:
+        text = text.strip()
+        if len(text) <= 14 or "\n" in text:
+            return text
+
+        break_chars = ["、", "，", " ", "　", ",", ".", "：", ":"]
+        middle = len(text) // 2
+        best_idx = -1
+        min_diff = len(text)
+
+        for i, char in enumerate(text):
+            if char in break_chars:
+                diff = abs(i - middle)
+                if diff < min_diff:
+                    min_diff = diff
+                    best_idx = i
+
+        if best_idx != -1:
+            first = text[:best_idx + 1]
+            second = text[best_idx + 1:]
+            if first.strip() and second.strip():
+                return f"{first.strip()}\n{second.strip()}"
+
+        first = text[:middle]
+        second = text[middle:]
+        return f"{first}\n{second}"
+
+    def _format_title_ass_text(self, text: str) -> str:
+        wrapped = self._wrap_title(text)
+        clean = wrapped.replace("\r\n", "\n").replace("\r", "\n")
+        clean = clean.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}")
+        lines = [line.strip() for line in clean.splitlines() if line.strip()]
+        return r"\N".join(lines[:2])
+
+    def _title_alignment_and_margin(self, position: str) -> tuple[int, int]:
+        if position == "上":
+            return 8, 170
+        if position == "中央":
+            return 5, 0
+        return 2, 170
+
+    def _parse_title_duration(self, duration_str: str, total_duration: float) -> float:
+        if "3秒" in duration_str or duration_str == "3秒" or duration_str == "3":
+            return min(total_duration, 3.0)
+        if "5秒" in duration_str or duration_str == "5秒" or duration_str == "5":
+            return min(total_duration, 5.0)
+        if "10秒" in duration_str or duration_str == "10秒" or duration_str == "10":
+            return min(total_duration, 10.0)
+        return total_duration
 
     def _parse_json_list(self, data: Any) -> list[SubtitleCue]:
         if not isinstance(data, list):

@@ -32,6 +32,11 @@ class AppSettings:
     subtitle_position: str = "下"
     subtitle_outline: int = 4
     subtitle_shadow_enabled: bool = True
+    title_enabled: bool = False
+    title_size: int = 72
+    title_position: str = "上"
+    title_bg_enabled: bool = True
+    title_duration: str = "常に表示"
     image_common_conditions: str = "・9:16\n・4K\n・文字なし\n・リアル\n・映画風\n・ドキュメンタリー風"
 
 

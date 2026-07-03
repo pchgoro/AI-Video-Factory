@@ -128,6 +128,29 @@ class SettingsDialog(QDialog):
         self.subtitle_shadow_check.setChecked(settings.subtitle_shadow_enabled)
         form.addRow("字幕影", self.subtitle_shadow_check)
 
+        self.title_enabled_check = QCheckBox("タイトルを表示")
+        self.title_enabled_check.setChecked(settings.title_enabled)
+        form.addRow("タイトル表示", self.title_enabled_check)
+
+        self.title_size_box = QSpinBox()
+        self.title_size_box.setRange(24, 160)
+        self.title_size_box.setValue(settings.title_size)
+        form.addRow("タイトルサイズ", self.title_size_box)
+
+        self.title_position_box = QComboBox()
+        self.title_position_box.addItems(["上", "中央", "下"])
+        self.title_position_box.setCurrentText(settings.title_position)
+        form.addRow("タイトル位置", self.title_position_box)
+
+        self.title_bg_check = QCheckBox("半透明背景")
+        self.title_bg_check.setChecked(settings.title_bg_enabled)
+        form.addRow("タイトル背景", self.title_bg_check)
+
+        self.title_duration_box = QComboBox()
+        self.title_duration_box.addItems(["常に表示", "3秒", "5秒", "10秒"])
+        self.title_duration_box.setCurrentText(settings.title_duration)
+        form.addRow("タイトル表示時間", self.title_duration_box)
+
         self.image_common_conditions_edit = QTextEdit()
         self.image_common_conditions_edit.setPlainText(settings.image_common_conditions)
         self.image_common_conditions_edit.setFixedHeight(120)
@@ -183,6 +206,11 @@ class SettingsDialog(QDialog):
             subtitle_position=self.subtitle_position_box.currentText(),
             subtitle_outline=self.subtitle_outline_box.value(),
             subtitle_shadow_enabled=self.subtitle_shadow_check.isChecked(),
+            title_enabled=self.title_enabled_check.isChecked(),
+            title_size=self.title_size_box.value(),
+            title_position=self.title_position_box.currentText(),
+            title_bg_enabled=self.title_bg_check.isChecked(),
+            title_duration=self.title_duration_box.currentText(),
             image_common_conditions=self.image_common_conditions_edit.toPlainText().strip()
             or "・9:16\n・4K\n・文字なし\n・リアル\n・映画風\n・ドキュメンタリー風",
         )
