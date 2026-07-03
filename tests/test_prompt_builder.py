@@ -11,7 +11,7 @@ def test_bulk_image_prompt_uses_requested_image_count() -> None:
     assert "画像1" in prompt
     assert "画像3" in prompt
     assert "画像4" not in prompt
-    assert "画像はすべて同時に生成してください。" in prompt
+    assert "1枚ずつ出力してください" in prompt
 
 
 def test_bulk_image_prompt_adds_template_condition() -> None:
