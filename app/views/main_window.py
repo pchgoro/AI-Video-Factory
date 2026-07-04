@@ -49,6 +49,7 @@ from config import AppPaths
 from dialogs.settings_dialog import SettingsDialog
 from models import DEFAULT_DURATIONS, PROGRESS_ITEMS, ProjectInfo, PromptTemplate, WIZARD_STEPS
 from services.dashboard_service import DashboardService
+from services.analytics_service import AnalyticsError, AnalyticsReport, AnalyticsService
 from services.image_import_service import ImageImportError, ImageImportService
 from services.parser import ChatGptAnswerParser, ChatGptParseError
 from services.compilation_service import CompilationService
@@ -141,6 +142,8 @@ class MainWindow(QMainWindow):
         self.parser = ChatGptAnswerParser()
         self.image_import_service = ImageImportService()
         self.tag_service = TagService()
+        self.analytics_service = AnalyticsService()
+        self.analytics_report = AnalyticsReport()
         self.settings = settings_service.load()
         self.compilation_service = CompilationService(self.settings.ffmpeg_path, self.settings.output_width, self.settings.output_height)
         self.current_project: ProjectInfo | None = None
@@ -266,6 +269,7 @@ class MainWindow(QMainWindow):
         self.main_tabs.addTab(self._scrollable_page(self._build_dashboard_tab()), "ホーム")
         self.main_tabs.addTab(self._scrollable_page(self._build_wizard_tab()), "制作ウィザード")
         self.main_tabs.addTab(self._build_compilation_tab(), "総集編")
+        self.main_tabs.addTab(self._scrollable_page(self._build_analytics_tab()), "Analytics")
         return self.main_tabs
 
     def _scrollable_page(self, widget: QWidget) -> QScrollArea:
@@ -625,6 +629,113 @@ class MainWindow(QMainWindow):
         layout.addWidget(create_button)
         return panel
 
+    def _build_analytics_tab(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+
+        action_row = QHBoxLayout()
+        import_button = QPushButton("CSVを読み込む")
+        import_button.clicked.connect(self.import_analytics_csv)
+        export_button = QPushButton("分析結果CSV保存")
+        export_button.clicked.connect(self.export_analytics_csv)
+        refresh_button = QPushButton("再表示")
+        refresh_button.clicked.connect(self.refresh_analytics_view)
+        action_row.addWidget(import_button)
+        action_row.addWidget(export_button)
+        action_row.addWidget(refresh_button)
+        action_row.addStretch()
+        layout.addLayout(action_row)
+
+        summary_box = QGroupBox("集計")
+        summary_grid = QGridLayout(summary_box)
+        self.analytics_summary_labels: dict[str, QLabel] = {}
+        summary_items = [
+            ("total_videos", "総動画数"),
+            ("total_views", "総再生数"),
+            ("average_views", "平均再生数"),
+            ("max_views", "最高再生数"),
+            ("min_views", "最低再生数"),
+            ("total_likes", "総いいね"),
+            ("total_comments", "総コメント"),
+            ("average_like_rate", "平均いいね率"),
+            ("average_comment_rate", "平均コメント率"),
+        ]
+        for index, (key, label) in enumerate(summary_items):
+            caption = QLabel(label)
+            value = QLabel("-")
+            value.setStyleSheet("font-size: 18px; font-weight: 700; color: #9cdcfe;")
+            self.analytics_summary_labels[key] = value
+            summary_grid.addWidget(caption, index // 3 * 2, index % 3)
+            summary_grid.addWidget(value, index // 3 * 2 + 1, index % 3)
+        layout.addWidget(summary_box)
+
+        search_box = QGroupBox("検索")
+        search_layout = QGridLayout(search_box)
+        self.analytics_title_filter = QLineEdit()
+        self.analytics_title_filter.setPlaceholderText("タイトル")
+        self.analytics_genre_filter = QLineEdit()
+        self.analytics_genre_filter.setPlaceholderText("ジャンル")
+        self.analytics_min_views_filter = QSpinBox()
+        self.analytics_min_views_filter.setRange(0, 2_000_000_000)
+        self.analytics_min_views_filter.setSingleStep(100)
+        self.analytics_date_filter = QLineEdit()
+        self.analytics_date_filter.setPlaceholderText("投稿日 例: 2026-07")
+        self.analytics_rating_filter = QComboBox()
+        self.analytics_rating_filter.addItems(["すべて", "★以上", "★★以上", "★★★以上", "★★★★以上", "★★★★★"])
+        for widget in [
+            self.analytics_title_filter,
+            self.analytics_genre_filter,
+            self.analytics_min_views_filter,
+            self.analytics_date_filter,
+            self.analytics_rating_filter,
+        ]:
+            if isinstance(widget, QComboBox):
+                widget.currentTextChanged.connect(self.apply_analytics_filters)
+            elif isinstance(widget, QSpinBox):
+                widget.valueChanged.connect(self.apply_analytics_filters)
+            else:
+                widget.textChanged.connect(self.apply_analytics_filters)
+        search_layout.addWidget(QLabel("タイトル"), 0, 0)
+        search_layout.addWidget(self.analytics_title_filter, 0, 1)
+        search_layout.addWidget(QLabel("ジャンル"), 0, 2)
+        search_layout.addWidget(self.analytics_genre_filter, 0, 3)
+        search_layout.addWidget(QLabel("再生数以上"), 1, 0)
+        search_layout.addWidget(self.analytics_min_views_filter, 1, 1)
+        search_layout.addWidget(QLabel("投稿日"), 1, 2)
+        search_layout.addWidget(self.analytics_date_filter, 1, 3)
+        search_layout.addWidget(QLabel("評価"), 2, 0)
+        search_layout.addWidget(self.analytics_rating_filter, 2, 1)
+        layout.addWidget(search_box)
+
+        self.analytics_tabs = QTabWidget()
+        graph_panel = QWidget()
+        graph_layout = QVBoxLayout(graph_panel)
+        self.analytics_graph_label = QLabel("CSVを読み込むとグラフが表示されます。")
+        self.analytics_graph_label.setAlignment(Qt.AlignCenter)
+        self.analytics_graph_label.setMinimumHeight(420)
+        graph_layout.addWidget(self.analytics_graph_label)
+
+        self.analytics_ranking_text = QTextEdit()
+        self.analytics_ranking_text.setReadOnly(True)
+        self.analytics_genre_text = QTextEdit()
+        self.analytics_genre_text.setReadOnly(True)
+        self.analytics_title_text = QTextEdit()
+        self.analytics_title_text.setReadOnly(True)
+        self.analytics_records_text = QTextEdit()
+        self.analytics_records_text.setReadOnly(True)
+        self.analytics_comments_text = QTextEdit()
+        self.analytics_comments_text.setReadOnly(True)
+
+        self.analytics_tabs.addTab(graph_panel, "グラフ")
+        self.analytics_tabs.addTab(self.analytics_ranking_text, "ランキング")
+        self.analytics_tabs.addTab(self.analytics_genre_text, "ジャンル分析")
+        self.analytics_tabs.addTab(self.analytics_title_text, "タイトル分析")
+        self.analytics_tabs.addTab(self.analytics_records_text, "動画一覧")
+        self.analytics_tabs.addTab(self.analytics_comments_text, "コメント")
+        layout.addWidget(self.analytics_tabs, stretch=1)
+        self.refresh_analytics_view()
+        return panel
+
     def set_image_thumbnail_area_height(self, height: int) -> None:
         if not hasattr(self, "image_thumbnail_scroll"):
             return
@@ -687,6 +798,8 @@ class MainWindow(QMainWindow):
         self.refresh_completer()
         if hasattr(self, "compilation_genre_box"):
             self.refresh_compilation_genres()
+        if hasattr(self, "analytics_records_text"):
+            self.refresh_analytics_view()
 
     def refresh_dashboard(self) -> None:
         stats = self.dashboard_service.build(self.projects)
@@ -704,6 +817,147 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(self._project_display_name(project))
             item.setData(Qt.UserRole, str(project.path))
             self.recent_list.addItem(item)
+
+    def import_analytics_csv(self) -> None:
+        file_path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "分析するCSVを選択",
+            str(self.paths.base_dir),
+            "CSVファイル (*.csv)",
+        )
+        if not file_path:
+            return
+        try:
+            self.analytics_report = self.analytics_service.import_csv(Path(file_path), self.projects)
+            graph_path = self.paths.exports_dir / "analytics_dashboard.png"
+            self.analytics_service.render_dashboard_graphs(self.analytics_report, graph_path)
+        except AnalyticsError as exc:
+            QMessageBox.warning(self, "Analyticsエラー", str(exc))
+            return
+        self.refresh_analytics_view()
+        QMessageBox.information(self, "Analytics", "CSVを読み込みました。")
+
+    def export_analytics_csv(self) -> None:
+        if not self.analytics_report.records:
+            QMessageBox.warning(self, "Analyticsエラー", "先にCSVを読み込んでください。")
+            return
+        output_path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "分析結果CSVを保存",
+            str(self.paths.exports_dir / "analytics_result.csv"),
+            "CSVファイル (*.csv)",
+        )
+        if not output_path:
+            return
+        try:
+            self.analytics_service.export_report_csv(self.analytics_report, Path(output_path))
+        except AnalyticsError as exc:
+            QMessageBox.warning(self, "Analyticsエラー", str(exc))
+            return
+        QMessageBox.information(self, "Analytics", "分析結果CSVを保存しました。")
+
+    def refresh_analytics_view(self) -> None:
+        if not hasattr(self, "analytics_summary_labels"):
+            return
+        report = self.analytics_report
+        summary = report.summary
+        values = {
+            "total_videos": str(summary.total_videos),
+            "total_views": f"{summary.total_views:,}",
+            "average_views": f"{summary.average_views:,.0f}",
+            "max_views": f"{summary.max_views:,}",
+            "min_views": f"{summary.min_views:,}",
+            "total_likes": f"{summary.total_likes:,}",
+            "total_comments": f"{summary.total_comments:,}",
+            "average_like_rate": f"{summary.average_like_rate:.2f}%",
+            "average_comment_rate": f"{summary.average_comment_rate:.2f}%",
+        }
+        for key, value in values.items():
+            self.analytics_summary_labels[key].setText(value)
+
+        self.analytics_ranking_text.setPlainText(self._analytics_ranking_text(report))
+        self.analytics_genre_text.setPlainText(self._analytics_genre_text(report))
+        self.analytics_title_text.setPlainText(self._analytics_title_text(report))
+        self.analytics_comments_text.setPlainText("\n".join(report.comments))
+        self.apply_analytics_filters()
+        graph_path = self.paths.exports_dir / "analytics_dashboard.png"
+        if graph_path.exists():
+            pixmap = QPixmap(str(graph_path))
+            if not pixmap.isNull():
+                self.analytics_graph_label.setPixmap(
+                    pixmap.scaled(self.analytics_graph_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                )
+
+    def apply_analytics_filters(self) -> None:
+        if not hasattr(self, "analytics_records_text"):
+            return
+        rating_index = self.analytics_rating_filter.currentIndex()
+        records = self.analytics_service.filter_records(
+            self.analytics_report.records,
+            title_keyword=self.analytics_title_filter.text(),
+            genre_keyword=self.analytics_genre_filter.text(),
+            min_views=self.analytics_min_views_filter.value(),
+            posted_date=self.analytics_date_filter.text(),
+            min_rating=rating_index,
+        )
+        if not records:
+            self.analytics_records_text.setPlainText("該当する動画がありません。")
+            return
+        self.analytics_records_text.setPlainText("\n".join(self._analytics_record_line(record) for record in records))
+
+    def _analytics_ranking_text(self, report: AnalyticsReport) -> str:
+        if not report.records:
+            return "CSVを読み込むとランキングが表示されます。"
+        sections: list[str] = []
+        for name, records in report.rankings.items():
+            sections.append(f"【{name} TOP10】")
+            for index, record in enumerate(records, start=1):
+                if name == "いいね率":
+                    value = f"{record.like_rate:.2f}%"
+                elif name == "コメント率":
+                    value = f"{record.comment_rate:.2f}%"
+                elif name == "いいね":
+                    value = f"{record.likes:,}"
+                elif name == "コメント":
+                    value = f"{record.comments:,}"
+                else:
+                    value = f"{record.views:,}"
+                sections.append(f"{index}. {record.title} / {value}")
+            sections.append("")
+        return "\n".join(sections).strip()
+
+    def _analytics_genre_text(self, report: AnalyticsReport) -> str:
+        if not report.genre_metrics:
+            return "ジャンル分析データがありません。"
+        lines = ["【ジャンル別】"]
+        for metric in report.genre_metrics:
+            lines.append(
+                f"{metric.name}: 動画数 {metric.count} / 平均再生数 {metric.average_views:,.0f} / 平均いいね {metric.average_likes:,.0f}"
+            )
+        return "\n".join(lines)
+
+    def _analytics_title_text(self, report: AnalyticsReport) -> str:
+        if not report.records:
+            return "タイトル分析データがありません。"
+        lines = ["【頻出ワード】"]
+        for metric in report.word_metrics:
+            lines.append(f"{metric.word}: {metric.count}件 / 平均再生数 {metric.average_views:,.0f}")
+        lines.append("")
+        lines.append("【タイトルパターン】")
+        for metric in report.pattern_metrics:
+            lines.append(
+                f"{metric.name}: 動画数 {metric.count} / 平均再生数 {metric.average_views:,.0f} / 平均いいね {metric.average_likes:,.0f}"
+            )
+        return "\n".join(lines)
+
+    def _analytics_record_line(self, record) -> str:
+        stars = "★" * record.rating + "☆" * (5 - record.rating)
+        return (
+            f"{stars}  {record.title}\n"
+            f"  ジャンル: {record.genre} / 再生数: {record.views:,} / いいね: {record.likes:,} "
+            f"/ コメント: {record.comments:,} / いいね率: {record.like_rate:.2f}% / コメント率: {record.comment_rate:.2f}% "
+            f"/ 投稿日: {record.posted_date or '-'}"
+        )
 
     def refresh_project_list(self) -> None:
         keyword = self.project_search.text().strip().lower()
