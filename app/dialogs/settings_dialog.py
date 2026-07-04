@@ -105,6 +105,14 @@ class SettingsDialog(QDialog):
         self.bgm_volume_box.setSuffix("%")
         form.addRow("BGM音量", self.bgm_volume_box)
 
+        self.intro_enabled_check = QCheckBox("オープニングを使用する")
+        self.intro_enabled_check.setChecked(settings.intro_enabled)
+        form.addRow("オープニング", self.intro_enabled_check)
+
+        self.ending_enabled_check = QCheckBox("エンディングを使用する")
+        self.ending_enabled_check.setChecked(settings.ending_enabled)
+        form.addRow("エンディング", self.ending_enabled_check)
+
         self.subtitles_enabled_check = QCheckBox("字幕を使用する")
         self.subtitles_enabled_check.setChecked(settings.subtitles_enabled)
         form.addRow("字幕", self.subtitles_enabled_check)
@@ -190,6 +198,12 @@ class SettingsDialog(QDialog):
         bgm_folder_button = QPushButton("BGMフォルダを開く")
         bgm_folder_button.clicked.connect(self.open_bgm_folder)
         layout.addWidget(bgm_folder_button)
+        intro_folder_button = QPushButton("オープニングフォルダを開く")
+        intro_folder_button.clicked.connect(self.open_intro_folder)
+        layout.addWidget(intro_folder_button)
+        ending_folder_button = QPushButton("エンディングフォルダを開く")
+        ending_folder_button.clicked.connect(self.open_ending_folder)
+        layout.addWidget(ending_folder_button)
 
         layout.addWidget(QLabel("ジャンル（1行に1つ）"))
 
@@ -230,6 +244,8 @@ class SettingsDialog(QDialog):
             zoom_enabled=self.zoom_check.isChecked(),
             bgm_enabled=self.bgm_enabled_check.isChecked(),
             bgm_volume_percent=self.bgm_volume_box.value(),
+            intro_enabled=self.intro_enabled_check.isChecked(),
+            ending_enabled=self.ending_enabled_check.isChecked(),
             subtitles_enabled=self.subtitles_enabled_check.isChecked(),
             subtitle_font_size=self.subtitle_font_size_box.value(),
             subtitle_position=self.subtitle_position_box.currentText(),
@@ -272,3 +288,17 @@ class SettingsDialog(QDialog):
             return
         self.paths.bgm_dir.mkdir(parents=True, exist_ok=True)
         os.startfile(self.paths.bgm_dir)
+
+    def open_intro_folder(self) -> None:
+        if self.paths is None:
+            QMessageBox.information(self, "オープニングフォルダ", "保存先の情報がないため開けません。")
+            return
+        self.paths.intro_dir.mkdir(parents=True, exist_ok=True)
+        os.startfile(self.paths.intro_dir)
+
+    def open_ending_folder(self) -> None:
+        if self.paths is None:
+            QMessageBox.information(self, "エンディングフォルダ", "保存先の情報がないため開けません。")
+            return
+        self.paths.ending_dir.mkdir(parents=True, exist_ok=True)
+        os.startfile(self.paths.ending_dir)

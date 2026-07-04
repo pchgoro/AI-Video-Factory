@@ -27,6 +27,8 @@ class AppSettings:
     zoom_enabled: bool = True
     bgm_enabled: bool = True
     bgm_volume_percent: int = 20
+    intro_enabled: bool = False
+    ending_enabled: bool = False
     subtitles_enabled: bool = True
     subtitle_font_size: int = 64
     subtitle_position: str = "下"

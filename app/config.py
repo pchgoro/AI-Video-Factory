@@ -39,6 +39,14 @@ class AppPaths:
         return self.assets_dir / "bgm"
 
     @property
+    def intro_dir(self) -> Path:
+        return self.assets_dir / "intro"
+
+    @property
+    def ending_dir(self) -> Path:
+        return self.assets_dir / "ending"
+
+    @property
     def logs_dir(self) -> Path:
         return self.base_dir / "logs"
 
@@ -74,6 +82,8 @@ class AppPaths:
             self.exports_dir,
             self.assets_dir,
             self.bgm_dir,
+            self.intro_dir,
+            self.ending_dir,
             self.logs_dir,
             self.samples_dir,
             self.sample_images_dir,

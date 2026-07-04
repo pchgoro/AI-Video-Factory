@@ -37,6 +37,8 @@ class SettingsService:
             zoom_enabled=bool(data.get("zoom_enabled", True)),
             bgm_enabled=bool(data.get("bgm_enabled", True)),
             bgm_volume_percent=int(data.get("bgm_volume_percent", 20)),
+            intro_enabled=bool(data.get("intro_enabled", False)),
+            ending_enabled=bool(data.get("ending_enabled", False)),
             subtitles_enabled=bool(data.get("subtitles_enabled", True)),
             subtitle_font_size=int(data.get("subtitle_font_size", 64)),
             subtitle_position=data.get("subtitle_position", "下"),

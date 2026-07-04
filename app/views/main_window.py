@@ -51,6 +51,7 @@ from models import DEFAULT_DURATIONS, PROGRESS_ITEMS, ProjectInfo, PromptTemplat
 from services.dashboard_service import DashboardService
 from services.image_import_service import ImageImportError, ImageImportService
 from services.parser import ChatGptAnswerParser, ChatGptParseError
+from services.compilation_service import CompilationService
 from services.project_service import ProjectService
 from services.prompt_builder import build_bulk_image_prompt, build_chatgpt_prompt
 from services.settings_service import SettingsService
@@ -141,6 +142,7 @@ class MainWindow(QMainWindow):
         self.image_import_service = ImageImportService()
         self.tag_service = TagService()
         self.settings = settings_service.load()
+        self.compilation_service = CompilationService(self.settings.ffmpeg_path, self.settings.output_width, self.settings.output_height)
         self.current_project: ProjectInfo | None = None
         self.projects: list[ProjectInfo] = []
         self.topics: list[str] = []
@@ -359,6 +361,7 @@ class MainWindow(QMainWindow):
         self.content_tabs.addTab(self._build_bulk_image_prompt_tab(), "一括画像生成")
         self.content_tabs.addTab(self._build_assets_tab(), "素材管理")
         self.content_tabs.addTab(self._build_video_preview_tab(), "完成動画プレビュー")
+        self.content_tabs.addTab(self._build_compilation_tab(), "総集編")
         layout.addWidget(self.content_tabs, stretch=2)
 
         bottom = QHBoxLayout()
@@ -587,6 +590,31 @@ class MainWindow(QMainWindow):
         layout.addLayout(controls)
         return panel
 
+    def _build_compilation_tab(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+
+        top_row = QHBoxLayout()
+        top_row.addWidget(QLabel("シリーズ名"))
+        self.compilation_series_box = QComboBox()
+        self.compilation_series_box.currentTextChanged.connect(self.refresh_compilation_project_list)
+        top_row.addWidget(self.compilation_series_box, stretch=1)
+        refresh_button = QPushButton("更新")
+        refresh_button.clicked.connect(self.refresh_compilation_series)
+        top_row.addWidget(refresh_button)
+        layout.addLayout(top_row)
+
+        self.compilation_summary_label = QLabel("動画本数: 0 / 総時間: 00:00")
+        layout.addWidget(self.compilation_summary_label)
+
+        self.compilation_project_list = QListWidget()
+        layout.addWidget(self.compilation_project_list, stretch=1)
+
+        create_button = QPushButton("総集編を作成")
+        create_button.clicked.connect(self.create_compilation_video)
+        layout.addWidget(create_button)
+        return panel
+
     def set_image_thumbnail_area_height(self, height: int) -> None:
         if not hasattr(self, "image_thumbnail_scroll"):
             return
@@ -647,6 +675,8 @@ class MainWindow(QMainWindow):
         self.refresh_project_list()
         self.refresh_dashboard()
         self.refresh_completer()
+        if hasattr(self, "compilation_series_box"):
+            self.refresh_compilation_series()
 
     def refresh_dashboard(self) -> None:
         stats = self.dashboard_service.build(self.projects)
@@ -684,6 +714,45 @@ class MainWindow(QMainWindow):
             if current_path and str(project.path) == current_path:
                 item.setSelected(True)
         self.project_list.blockSignals(False)
+
+    def refresh_compilation_series(self) -> None:
+        if not hasattr(self, "compilation_series_box"):
+            return
+        current = self.compilation_series_box.currentText()
+        series_names = sorted(
+            {
+                project.series
+                for project in self.projects
+                if project.series and (project.path / "video" / "final.mp4").exists()
+            }
+        )
+        self.compilation_series_box.blockSignals(True)
+        self.compilation_series_box.clear()
+        self.compilation_series_box.addItems(series_names)
+        if current in series_names:
+            self.compilation_series_box.setCurrentText(current)
+        self.compilation_series_box.blockSignals(False)
+        self.refresh_compilation_project_list()
+
+    def refresh_compilation_project_list(self) -> None:
+        if not hasattr(self, "compilation_project_list"):
+            return
+        series_name = self.compilation_series_box.currentText()
+        projects = self._compilation_projects(series_name)
+        self.compilation_project_list.clear()
+        total_duration = 0.0
+        for project in projects:
+            video_path = project.path / "video" / "final.mp4"
+            total_duration += self.compilation_service.media_duration(video_path) or self._duration_seconds(project.duration)
+            label = f"{project.series_number:03d}  {project.title or project.topic or project.name}"
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, str(project.path))
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked)
+            self.compilation_project_list.addItem(item)
+        self.compilation_summary_label.setText(
+            f"シリーズ名: {series_name or '-'} / 動画本数: {len(projects)} / 総時間: {self.compilation_service.format_timestamp(total_duration)}"
+        )
 
     def refresh_topic_list(self) -> None:
         keyword = self.topic_search.text().strip().lower()
@@ -936,6 +1005,53 @@ class MainWindow(QMainWindow):
         self.reload_projects()
         self.status_label.setText(result.message)
         self.content_tabs.setCurrentIndex(5)
+
+    def create_compilation_video(self) -> None:
+        selected_projects = self._selected_compilation_projects()
+        if not selected_projects:
+            QMessageBox.warning(self, "総集編作成エラー", "総集編に使う動画を選択してください。")
+            return
+        intro_path = self.compilation_service.first_asset(self.paths.intro_dir) if self.settings.intro_enabled else None
+        ending_path = self.compilation_service.first_asset(self.paths.ending_dir) if self.settings.ending_enabled else None
+        result = self.compilation_service.create_series_compilation(
+            selected_projects,
+            self.paths.exports_dir / "series",
+            intro_path=intro_path,
+            ending_path=ending_path,
+        )
+        if not result.success:
+            QMessageBox.warning(self, "総集編作成エラー", result.message)
+            return
+        self.status_label.setText(result.message)
+        QMessageBox.information(self, "総集編作成", f"総集編を作成しました。\n{result.output_path}")
+
+    def _selected_compilation_projects(self) -> list[ProjectInfo]:
+        selected_paths: list[str] = []
+        for index in range(self.compilation_project_list.count()):
+            item = self.compilation_project_list.item(index)
+            if item.checkState() == Qt.Checked:
+                selected_paths.append(str(item.data(Qt.UserRole)))
+        projects_by_path = {str(project.path): project for project in self.projects}
+        return [projects_by_path[path] for path in selected_paths if path in projects_by_path]
+
+    def _compilation_projects(self, series_name: str) -> list[ProjectInfo]:
+        return sorted(
+            [
+                project
+                for project in self.projects
+                if project.series == series_name and (project.path / "video" / "final.mp4").exists()
+            ],
+            key=lambda project: project.series_number,
+        )
+
+    def _duration_seconds(self, duration: str) -> float:
+        match = re.search(r"\d+", duration or "")
+        if not match:
+            return 60.0
+        value = float(match.group())
+        if "分" in duration:
+            return value * 60.0
+        return value
 
     def save_youtube_tags(self) -> None:
         if self.current_project is None:
@@ -1397,6 +1513,7 @@ class MainWindow(QMainWindow):
             return
         self.voicevox_service = VoicevoxService(self.settings.voicevox_url, self.settings.voicevox_speaker_id)
         self.video_render_service = VideoRenderService(create_video_editor(self.settings.video_editor_engine, self.settings.ffmpeg_path), self.settings)
+        self.compilation_service = CompilationService(self.settings.ffmpeg_path, self.settings.output_width, self.settings.output_height)
         QMessageBox.information(self, "設定保存", "設定を保存しました。")
         self.apply_settings_to_ui()
 

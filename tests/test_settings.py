@@ -14,6 +14,8 @@ def test_settings_roundtrip(tmp_path) -> None:
     settings.ffmpeg_path = "ffmpeg"
     settings.bgm_enabled = True
     settings.bgm_volume_percent = 35
+    settings.intro_enabled = True
+    settings.ending_enabled = True
     settings.subtitles_enabled = False
     settings.subtitle_font_size = 72
     settings.subtitle_position = "中央"
@@ -37,6 +39,8 @@ def test_settings_roundtrip(tmp_path) -> None:
     assert loaded.ffmpeg_path == "ffmpeg"
     assert loaded.bgm_enabled is True
     assert loaded.bgm_volume_percent == 35
+    assert loaded.intro_enabled is True
+    assert loaded.ending_enabled is True
     assert loaded.subtitles_enabled is False
     assert loaded.subtitle_font_size == 72
     assert loaded.subtitle_position == "中央"

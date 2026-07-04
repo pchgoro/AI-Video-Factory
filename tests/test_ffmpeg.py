@@ -36,6 +36,8 @@ class CaptureEditor:
 
     def render(self, request: VideoEditRequest) -> VideoEditResult:
         self.request = request
+        request.output_path.parent.mkdir(parents=True, exist_ok=True)
+        request.output_path.write_bytes(b"video")
         return VideoEditResult(True, "ok")
 
 
@@ -57,6 +59,60 @@ def test_video_render_service_uses_first_bgm(tmp_path) -> None:
     assert editor.request is not None
     assert editor.request.bgm_path == bgm_dir / "001.mp3"
     assert editor.request.bgm_volume == 0.35
+
+
+def test_video_render_service_uses_intro_and_ending_when_enabled(tmp_path) -> None:
+    base = tmp_path / "workspace"
+    project_dir = base / "projects" / "p"
+    intro_dir = base / "assets" / "intro"
+    ending_dir = base / "assets" / "ending"
+    project_dir.mkdir(parents=True)
+    intro_dir.mkdir(parents=True)
+    ending_dir.mkdir(parents=True)
+    intro = intro_dir / "001.mp4"
+    ending = ending_dir / "001.png"
+    intro.write_bytes(b"intro")
+    ending.write_bytes(b"ending")
+
+    editor = CaptureEditor()
+    service = VideoRenderService(editor, AppSettings(intro_enabled=True, ending_enabled=True))
+    captured: dict[str, object] = {}
+
+    def fake_concat(paths, output_path, *_args, **_kwargs):
+        captured["paths"] = paths
+        captured["output_path"] = output_path
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"final")
+        return VideoEditResult(True, "ok", output_path)
+
+    service.compilation_service.concat = fake_concat
+    result = service.render_project(ProjectInfo(name="p", path=project_dir, image_count=3))
+
+    assert result.success
+    assert editor.request is not None
+    assert editor.request.output_path == project_dir / "video" / "final_body.mp4"
+    assert captured["paths"] == [intro, project_dir / "video" / "final_body.mp4", ending]
+    assert captured["output_path"] == project_dir / "video" / "final.mp4"
+
+
+def test_video_render_service_skips_intro_and_ending_when_disabled(tmp_path) -> None:
+    base = tmp_path / "workspace"
+    project_dir = base / "projects" / "p"
+    intro_dir = base / "assets" / "intro"
+    ending_dir = base / "assets" / "ending"
+    project_dir.mkdir(parents=True)
+    intro_dir.mkdir(parents=True)
+    ending_dir.mkdir(parents=True)
+    (intro_dir / "001.mp4").write_bytes(b"intro")
+    (ending_dir / "001.mp4").write_bytes(b"ending")
+
+    editor = CaptureEditor()
+    service = VideoRenderService(editor, AppSettings(intro_enabled=False, ending_enabled=False))
+    result = service.render_project(ProjectInfo(name="p", path=project_dir, image_count=3))
+
+    assert result.success
+    assert editor.request is not None
+    assert editor.request.output_path == project_dir / "video" / "final.mp4"
 
 
 def test_ffmpeg_command_mixes_looped_bgm_with_fades(tmp_path, monkeypatch) -> None:
