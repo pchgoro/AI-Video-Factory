@@ -49,6 +49,7 @@ from config import AppPaths
 from dialogs.settings_dialog import SettingsDialog
 from models import DEFAULT_DURATIONS, PROGRESS_ITEMS, ProjectInfo, PromptTemplate, WIZARD_STEPS
 from services.dashboard_service import DashboardService
+from services.ai_advisor_service import AdvisorReport, AiAdvisorService
 from services.analytics_service import AnalyticsError, AnalyticsReport, AnalyticsService
 from services.image_import_service import ImageImportError, ImageImportService
 from services.parser import ChatGptAnswerParser, ChatGptParseError
@@ -143,7 +144,9 @@ class MainWindow(QMainWindow):
         self.image_import_service = ImageImportService()
         self.tag_service = TagService()
         self.analytics_service = AnalyticsService()
+        self.ai_advisor_service = AiAdvisorService()
         self.analytics_report = AnalyticsReport()
+        self.ai_advisor_report = AdvisorReport()
         self.settings = settings_service.load()
         self.compilation_service = CompilationService(self.settings.ffmpeg_path, self.settings.output_width, self.settings.output_height)
         self.current_project: ProjectInfo | None = None
@@ -270,6 +273,7 @@ class MainWindow(QMainWindow):
         self.main_tabs.addTab(self._scrollable_page(self._build_wizard_tab()), "制作ウィザード")
         self.main_tabs.addTab(self._build_compilation_tab(), "総集編")
         self.main_tabs.addTab(self._scrollable_page(self._build_analytics_tab()), "Analytics")
+        self.main_tabs.addTab(self._scrollable_page(self._build_ai_advisor_tab()), "AIアドバイザー")
         return self.main_tabs
 
     def _scrollable_page(self, widget: QWidget) -> QScrollArea:
@@ -736,6 +740,54 @@ class MainWindow(QMainWindow):
         self.refresh_analytics_view()
         return panel
 
+    def _build_ai_advisor_tab(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+
+        top_row = QHBoxLayout()
+        refresh_button = QPushButton("提案を更新")
+        refresh_button.clicked.connect(self.refresh_ai_advisor_view)
+        top_row.addWidget(refresh_button)
+        top_row.addStretch()
+        layout.addLayout(top_row)
+
+        self.ai_advisor_daily_message = QLabel("")
+        self.ai_advisor_daily_message.setStyleSheet("font-size: 18px; font-weight: 700; color: #dcdcaa; padding: 8px;")
+        layout.addWidget(self.ai_advisor_daily_message)
+
+        grid = QGridLayout()
+        self.ai_today_text = QTextEdit()
+        self.ai_comments_text = QTextEdit()
+        self.ai_themes_text = QTextEdit()
+        self.ai_titles_text = QTextEdit()
+        self.ai_plan_text = QTextEdit()
+        self.ai_improvements_text = QTextEdit()
+        self.ai_goal_text = QTextEdit()
+        self.ai_badges_text = QTextEdit()
+        self.ai_inventory_text = QTextEdit()
+
+        widgets = [
+            ("今日の分析", self.ai_today_text),
+            ("自動コメント", self.ai_comments_text),
+            ("おすすめテーマ", self.ai_themes_text),
+            ("おすすめタイトル", self.ai_titles_text),
+            ("次の企画", self.ai_plan_text),
+            ("改善ポイント", self.ai_improvements_text),
+            ("制作目標", self.ai_goal_text),
+            ("バッジ", self.ai_badges_text),
+            ("ネタ在庫", self.ai_inventory_text),
+        ]
+        for index, (title, widget) in enumerate(widgets):
+            widget.setReadOnly(True)
+            widget.setMinimumHeight(135)
+            box = QGroupBox(title)
+            box_layout = QVBoxLayout(box)
+            box_layout.addWidget(widget)
+            grid.addWidget(box, index // 2, index % 2)
+        layout.addLayout(grid, stretch=1)
+        self.refresh_ai_advisor_view()
+        return panel
+
     def set_image_thumbnail_area_height(self, height: int) -> None:
         if not hasattr(self, "image_thumbnail_scroll"):
             return
@@ -800,6 +852,8 @@ class MainWindow(QMainWindow):
             self.refresh_compilation_genres()
         if hasattr(self, "analytics_records_text"):
             self.refresh_analytics_view()
+        if hasattr(self, "ai_today_text"):
+            self.refresh_ai_advisor_view()
 
     def refresh_dashboard(self) -> None:
         stats = self.dashboard_service.build(self.projects)
@@ -835,6 +889,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Analyticsエラー", str(exc))
             return
         self.refresh_analytics_view()
+        self.refresh_ai_advisor_view()
         QMessageBox.information(self, "Analytics", "CSVを読み込みました。")
 
     def export_analytics_csv(self) -> None:
@@ -887,6 +942,41 @@ class MainWindow(QMainWindow):
                 self.analytics_graph_label.setPixmap(
                     pixmap.scaled(self.analytics_graph_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 )
+        self.refresh_ai_advisor_view()
+
+    def refresh_ai_advisor_view(self) -> None:
+        if not hasattr(self, "ai_today_text"):
+            return
+        self.ai_advisor_report = self.ai_advisor_service.build(self.analytics_report, self.projects, self.topics)
+        report = self.ai_advisor_report
+        self.ai_advisor_daily_message.setText(report.daily_message)
+        self.ai_today_text.setPlainText("\n".join(f"・{line}" for line in report.today_analysis))
+        self.ai_comments_text.setPlainText("\n".join(f"・{line}" for line in report.comments))
+        self.ai_themes_text.setPlainText(
+            "\n".join(
+                f"{'★' * item.stars}{'☆' * (5 - item.stars)}\n{item.name}\n{item.reason}".strip()
+                for item in report.recommended_themes
+            )
+        )
+        self.ai_titles_text.setPlainText("\n".join(f"・{title}" for title in report.recommended_titles))
+        self.ai_plan_text.setPlainText("\n".join(report.next_plan))
+        self.ai_improvements_text.setPlainText("\n".join(f"・{line}" for line in report.improvements))
+        self.ai_goal_text.setPlainText(
+            f"今月目標\n{report.goal.target}本\n\n現在\n{report.goal.current}本\n\n{report.goal.bar}\n{report.goal.percent}%"
+        )
+        self.ai_badges_text.setPlainText(
+            "\n".join(f"{'✅' if badge.achieved else '□'} {badge.label}" for badge in report.badges)
+        )
+        self.ai_inventory_text.setPlainText(
+            "\n".join(
+                [
+                    f"未制作\n{report.inventory.unmade}件",
+                    f"制作中\n{report.inventory.in_progress}件",
+                    f"完成\n{report.inventory.completed}件",
+                    f"投稿済\n{report.inventory.posted}件",
+                ]
+            )
+        )
 
     def apply_analytics_filters(self) -> None:
         if not hasattr(self, "analytics_records_text"):

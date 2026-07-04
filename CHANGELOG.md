@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.7.1
+- AIアドバイザーを追加
+- Rule Engineによるおすすめテーマ提案を追加
+- CSVタイトル分析からおすすめタイトルを生成
+- 次の企画と改善ポイントを表示
+- 制作目標、実績バッジ、ネタ在庫、毎日の一言を追加
+
 ## v0.7.0
 - Analyticsタブを追加
 - YouTube Studio / TikTok Studio CSV分析に対応
