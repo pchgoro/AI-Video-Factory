@@ -112,13 +112,14 @@ class CompilationService:
         output_dir: Path,
         intro_path: Path | None = None,
         ending_path: Path | None = None,
+        output_name: str | None = None,
     ) -> VideoEditResult:
         selected_projects = [project for project in projects if (project.path / "video" / "final.mp4").exists()]
         if not selected_projects:
             return VideoEditResult(False, "総集編に使える完成動画がありません。")
 
-        series_name = selected_projects[0].series or selected_projects[0].topic or selected_projects[0].name
-        output_path = output_dir / f"{self.slugify(series_name)}_complete.mp4"
+        compilation_name = output_name or selected_projects[0].series or selected_projects[0].genre or selected_projects[0].topic or selected_projects[0].name
+        output_path = output_dir / f"{self.slugify(compilation_name)}_complete.mp4"
         chapter_path = output_dir / "chapter.txt"
 
         media_paths: list[Path] = []

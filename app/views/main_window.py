@@ -265,6 +265,7 @@ class MainWindow(QMainWindow):
         self.main_tabs = QTabWidget()
         self.main_tabs.addTab(self._scrollable_page(self._build_dashboard_tab()), "ホーム")
         self.main_tabs.addTab(self._scrollable_page(self._build_wizard_tab()), "制作ウィザード")
+        self.main_tabs.addTab(self._build_compilation_tab(), "総集編")
         return self.main_tabs
 
     def _scrollable_page(self, widget: QWidget) -> QScrollArea:
@@ -361,7 +362,6 @@ class MainWindow(QMainWindow):
         self.content_tabs.addTab(self._build_bulk_image_prompt_tab(), "一括画像生成")
         self.content_tabs.addTab(self._build_assets_tab(), "素材管理")
         self.content_tabs.addTab(self._build_video_preview_tab(), "完成動画プレビュー")
-        self.content_tabs.addTab(self._build_compilation_tab(), "総集編")
         layout.addWidget(self.content_tabs, stretch=2)
 
         bottom = QHBoxLayout()
@@ -595,20 +595,30 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
 
         top_row = QHBoxLayout()
-        top_row.addWidget(QLabel("シリーズ名"))
-        self.compilation_series_box = QComboBox()
-        self.compilation_series_box.currentTextChanged.connect(self.refresh_compilation_project_list)
-        top_row.addWidget(self.compilation_series_box, stretch=1)
+        top_row.addWidget(QLabel("ジャンル"))
+        self.compilation_genre_box = QComboBox()
+        self.compilation_genre_box.currentTextChanged.connect(self.refresh_compilation_project_list)
+        top_row.addWidget(self.compilation_genre_box, stretch=1)
         refresh_button = QPushButton("更新")
-        refresh_button.clicked.connect(self.refresh_compilation_series)
+        refresh_button.clicked.connect(self.refresh_compilation_genres)
         top_row.addWidget(refresh_button)
         layout.addLayout(top_row)
 
-        self.compilation_summary_label = QLabel("動画本数: 0 / 総時間: 00:00")
+        self.compilation_summary_label = QLabel("ジャンル: - / 動画本数: 0 / 総時間: 00:00")
         layout.addWidget(self.compilation_summary_label)
 
         self.compilation_project_list = QListWidget()
         layout.addWidget(self.compilation_project_list, stretch=1)
+
+        order_buttons = QHBoxLayout()
+        up_button = QPushButton("上へ")
+        up_button.clicked.connect(lambda _checked=False: self.move_compilation_item(-1))
+        down_button = QPushButton("下へ")
+        down_button.clicked.connect(lambda _checked=False: self.move_compilation_item(1))
+        order_buttons.addWidget(up_button)
+        order_buttons.addWidget(down_button)
+        order_buttons.addStretch()
+        layout.addLayout(order_buttons)
 
         create_button = QPushButton("総集編を作成")
         create_button.clicked.connect(self.create_compilation_video)
@@ -675,8 +685,8 @@ class MainWindow(QMainWindow):
         self.refresh_project_list()
         self.refresh_dashboard()
         self.refresh_completer()
-        if hasattr(self, "compilation_series_box"):
-            self.refresh_compilation_series()
+        if hasattr(self, "compilation_genre_box"):
+            self.refresh_compilation_genres()
 
     def refresh_dashboard(self) -> None:
         stats = self.dashboard_service.build(self.projects)
@@ -715,43 +725,44 @@ class MainWindow(QMainWindow):
                 item.setSelected(True)
         self.project_list.blockSignals(False)
 
-    def refresh_compilation_series(self) -> None:
-        if not hasattr(self, "compilation_series_box"):
+    def refresh_compilation_genres(self) -> None:
+        if not hasattr(self, "compilation_genre_box"):
             return
-        current = self.compilation_series_box.currentText()
-        series_names = sorted(
+        current = self.compilation_genre_box.currentText()
+        genres = sorted(
             {
-                project.series
+                project.genre
                 for project in self.projects
-                if project.series and (project.path / "video" / "final.mp4").exists()
+                if project.genre and (project.path / "video" / "final.mp4").exists()
             }
         )
-        self.compilation_series_box.blockSignals(True)
-        self.compilation_series_box.clear()
-        self.compilation_series_box.addItems(series_names)
-        if current in series_names:
-            self.compilation_series_box.setCurrentText(current)
-        self.compilation_series_box.blockSignals(False)
+        self.compilation_genre_box.blockSignals(True)
+        self.compilation_genre_box.clear()
+        self.compilation_genre_box.addItems(genres)
+        if current in genres:
+            self.compilation_genre_box.setCurrentText(current)
+        self.compilation_genre_box.blockSignals(False)
         self.refresh_compilation_project_list()
 
     def refresh_compilation_project_list(self) -> None:
         if not hasattr(self, "compilation_project_list"):
             return
-        series_name = self.compilation_series_box.currentText()
-        projects = self._compilation_projects(series_name)
+        genre = self.compilation_genre_box.currentText()
+        projects = self._compilation_projects(genre)
         self.compilation_project_list.clear()
         total_duration = 0.0
         for project in projects:
             video_path = project.path / "video" / "final.mp4"
             total_duration += self.compilation_service.media_duration(video_path) or self._duration_seconds(project.duration)
-            label = f"{project.series_number:03d}  {project.title or project.topic or project.name}"
+            series_label = f"{project.series}{project.series_number:03d}" if project.series else project.name
+            label = f"{series_label}  {project.title or project.topic or project.name}"
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, str(project.path))
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked)
             self.compilation_project_list.addItem(item)
         self.compilation_summary_label.setText(
-            f"シリーズ名: {series_name or '-'} / 動画本数: {len(projects)} / 総時間: {self.compilation_service.format_timestamp(total_duration)}"
+            f"ジャンル: {genre or '-'} / 動画本数: {len(projects)} / 総時間: {self.compilation_service.format_timestamp(total_duration)}"
         )
 
     def refresh_topic_list(self) -> None:
@@ -1018,6 +1029,7 @@ class MainWindow(QMainWindow):
             self.paths.exports_dir / "series",
             intro_path=intro_path,
             ending_path=ending_path,
+            output_name=self.compilation_genre_box.currentText() or None,
         )
         if not result.success:
             QMessageBox.warning(self, "総集編作成エラー", result.message)
@@ -1034,14 +1046,25 @@ class MainWindow(QMainWindow):
         projects_by_path = {str(project.path): project for project in self.projects}
         return [projects_by_path[path] for path in selected_paths if path in projects_by_path]
 
-    def _compilation_projects(self, series_name: str) -> list[ProjectInfo]:
+    def move_compilation_item(self, direction: int) -> None:
+        current_row = self.compilation_project_list.currentRow()
+        if current_row < 0:
+            return
+        next_row = current_row + direction
+        if next_row < 0 or next_row >= self.compilation_project_list.count():
+            return
+        item = self.compilation_project_list.takeItem(current_row)
+        self.compilation_project_list.insertItem(next_row, item)
+        self.compilation_project_list.setCurrentRow(next_row)
+
+    def _compilation_projects(self, genre: str) -> list[ProjectInfo]:
         return sorted(
             [
                 project
                 for project in self.projects
-                if project.series == series_name and (project.path / "video" / "final.mp4").exists()
+                if project.genre == genre and (project.path / "video" / "final.mp4").exists()
             ],
-            key=lambda project: project.series_number,
+            key=lambda project: (project.series, project.series_number, project.name),
         )
 
     def _duration_seconds(self, duration: str) -> float:
