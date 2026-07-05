@@ -45,6 +45,11 @@ class AppSettings:
     title_padding: int = 15
     title_width_percent: int = 90
     title_line_spacing: int = 10
+    motion_style: str = "Random Motion"
+    zoom_speed: str = "Normal"
+    transition_type: str = "Cross Fade"
+    overlay_opacity: int = 30
+    light_effect: str = "OFF"
     image_common_conditions: str = "・9:16\n・4K\n・文字なし\n・リアル\n・映画風\n・ドキュメンタリー風"
 
 

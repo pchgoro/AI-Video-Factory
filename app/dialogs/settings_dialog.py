@@ -95,6 +95,42 @@ class SettingsDialog(QDialog):
         self.zoom_check.setChecked(settings.zoom_enabled)
         form.addRow("ズーム", self.zoom_check)
 
+        self.motion_style_box = QComboBox()
+        self.motion_style_box.addItems([
+            "Static",
+            "Slow Zoom In",
+            "Slow Zoom Out",
+            "Pan Left",
+            "Pan Right",
+            "Pan Up",
+            "Pan Down",
+            "Ken Burns",
+            "Random Motion",
+        ])
+        self.motion_style_box.setCurrentText(getattr(settings, "motion_style", "Random Motion"))
+        form.addRow("Motion Style", self.motion_style_box)
+
+        self.zoom_speed_box = QComboBox()
+        self.zoom_speed_box.addItems(["Slow", "Normal", "Fast"])
+        self.zoom_speed_box.setCurrentText(getattr(settings, "zoom_speed", "Normal"))
+        form.addRow("ズーム速度", self.zoom_speed_box)
+
+        self.transition_type_box = QComboBox()
+        self.transition_type_box.addItems(["Fade", "Cross Fade", "Zoom Fade", "Slide", "None"])
+        self.transition_type_box.setCurrentText(getattr(settings, "transition_type", "Cross Fade"))
+        form.addRow("トランジション", self.transition_type_box)
+
+        self.overlay_opacity_box = QSpinBox()
+        self.overlay_opacity_box.setRange(10, 50)
+        self.overlay_opacity_box.setValue(getattr(settings, "overlay_opacity", 30))
+        self.overlay_opacity_box.setSuffix("%")
+        form.addRow("宇宙オーバーレイ透明度", self.overlay_opacity_box)
+
+        self.light_effect_box = QComboBox()
+        self.light_effect_box.addItems(["OFF", "Lens Flare", "Glow", "Soft Light"])
+        self.light_effect_box.setCurrentText(getattr(settings, "light_effect", "OFF"))
+        form.addRow("Light Effect", self.light_effect_box)
+
         self.bgm_enabled_check = QCheckBox("BGMを使用する")
         self.bgm_enabled_check.setChecked(settings.bgm_enabled)
         form.addRow("BGM", self.bgm_enabled_check)
@@ -204,6 +240,9 @@ class SettingsDialog(QDialog):
         ending_folder_button = QPushButton("エンディングフォルダを開く")
         ending_folder_button.clicked.connect(self.open_ending_folder)
         layout.addWidget(ending_folder_button)
+        overlay_folder_button = QPushButton("Overlayフォルダを開く")
+        overlay_folder_button.clicked.connect(self.open_overlay_folder)
+        layout.addWidget(overlay_folder_button)
 
         layout.addWidget(QLabel("ジャンル（1行に1つ）"))
 
@@ -262,6 +301,11 @@ class SettingsDialog(QDialog):
             title_padding=self.title_padding_box.value(),
             title_width_percent=self.title_width_percent_box.value(),
             title_line_spacing=self.title_line_spacing_box.value(),
+            motion_style=self.motion_style_box.currentText(),
+            zoom_speed=self.zoom_speed_box.currentText(),
+            transition_type=self.transition_type_box.currentText(),
+            overlay_opacity=self.overlay_opacity_box.value(),
+            light_effect=self.light_effect_box.currentText(),
             image_common_conditions=self.image_common_conditions_edit.toPlainText().strip()
             or "・9:16\n・4K\n・文字なし\n・リアル\n・映画風\n・ドキュメンタリー風",
         )
@@ -302,3 +346,10 @@ class SettingsDialog(QDialog):
             return
         self.paths.ending_dir.mkdir(parents=True, exist_ok=True)
         os.startfile(self.paths.ending_dir)
+
+    def open_overlay_folder(self) -> None:
+        if self.paths is None:
+            QMessageBox.information(self, "Overlayフォルダ", "保存先の情報がないため開けません。")
+            return
+        self.paths.overlay_dir.mkdir(parents=True, exist_ok=True)
+        os.startfile(self.paths.overlay_dir)

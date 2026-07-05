@@ -55,6 +55,11 @@ class SettingsService:
             title_padding=int(data.get("title_padding", 15)),
             title_width_percent=int(data.get("title_width_percent", 90)),
             title_line_spacing=int(data.get("title_line_spacing", 10)),
+            motion_style=data.get("motion_style", "Random Motion"),
+            zoom_speed=data.get("zoom_speed", "Normal"),
+            transition_type=data.get("transition_type", "Cross Fade"),
+            overlay_opacity=int(data.get("overlay_opacity", 30)),
+            light_effect=data.get("light_effect", "OFF"),
             image_common_conditions=data.get(
                 "image_common_conditions",
                 "・9:16\n・4K\n・文字なし\n・リアル\n・映画風\n・ドキュメンタリー風",

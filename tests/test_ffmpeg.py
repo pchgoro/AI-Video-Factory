@@ -115,6 +115,35 @@ def test_video_render_service_skips_intro_and_ending_when_disabled(tmp_path) -> 
     assert editor.request.output_path == project_dir / "video" / "final.mp4"
 
 
+def test_video_render_service_sets_random_motion_and_overlay(tmp_path) -> None:
+    base = tmp_path / "workspace"
+    project_dir = base / "projects" / "p"
+    images_dir = project_dir / "images"
+    overlay_dir = base / "assets" / "overlay"
+    images_dir.mkdir(parents=True)
+    overlay_dir.mkdir(parents=True)
+    for index in range(1, 6):
+        (images_dir / f"{index:03d}.png").write_bytes(b"image")
+    overlay = overlay_dir / "stars.png"
+    overlay.write_bytes(b"overlay")
+    (project_dir / "image_prompts.txt").write_text("ブラックホール\n\n銀河\n\n宇宙船", encoding="utf-8")
+
+    editor = CaptureEditor()
+    settings = AppSettings(motion_style="Random Motion", overlay_opacity=35, light_effect="Soft Light")
+    result = VideoRenderService(editor, settings).render_project(ProjectInfo(name="p", path=project_dir, image_count=5))
+
+    assert result.success
+    assert editor.request is not None
+    assert editor.request.overlay_path == overlay
+    assert editor.request.overlay_opacity == 35
+    assert editor.request.light_effect == "Soft Light"
+    assert len(editor.request.image_motions) == 5
+    assert all(
+        current != previous
+        for previous, current in zip(editor.request.image_motions, editor.request.image_motions[1:])
+    )
+
+
 def test_ffmpeg_command_mixes_looped_bgm_with_fades(tmp_path, monkeypatch) -> None:
     from video_editors.ffmpeg_editor import FFmpegEditor
 
@@ -206,4 +235,54 @@ def test_ffmpeg_command_burns_ass_subtitles(tmp_path, monkeypatch) -> None:
     assert result.success
     assert "subtitles='" in filter_complex
     assert "subtitles.ass" in filter_complex
-    assert "[vbase]" in filter_complex
+    assert "[vmerged]" in filter_complex
+
+
+def test_ffmpeg_command_applies_motion_transition_overlay_and_light(tmp_path, monkeypatch) -> None:
+    from video_editors.ffmpeg_editor import FFmpegEditor
+
+    project_dir = tmp_path / "project"
+    images_dir = project_dir / "images"
+    audio_dir = project_dir / "audio"
+    video_dir = project_dir / "video"
+    overlay_path = tmp_path / "assets" / "overlay" / "stars.png"
+    images_dir.mkdir(parents=True)
+    audio_dir.mkdir(parents=True)
+    overlay_path.parent.mkdir(parents=True)
+    (images_dir / "001.png").write_bytes(b"image")
+    (images_dir / "002.png").write_bytes(b"image")
+    overlay_path.write_bytes(b"overlay")
+
+    captured: dict[str, list[str]] = {}
+    monkeypatch.setattr("video_editors.ffmpeg_editor.shutil.which", lambda _path: "ffmpeg")
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("video_editors.ffmpeg_editor.subprocess.run", fake_run)
+    result = FFmpegEditor("ffmpeg").render(
+        VideoEditRequest(
+            project_dir=project_dir,
+            images_dir=images_dir,
+            audio_dir=audio_dir,
+            video_dir=video_dir,
+            output_path=video_dir / "final.mp4",
+            seconds_per_image=5,
+            image_motions=["Slow Zoom In", "Pan Left"],
+            zoom_speed="Fast",
+            transition_type="Slide",
+            overlay_path=overlay_path,
+            overlay_opacity=40,
+            light_effect="Glow",
+        )
+    )
+
+    command = captured["command"]
+    filter_complex = command[command.index("-filter_complex") + 1]
+    assert result.success
+    assert "zoompan=z='1.0+0.2200*on/" in filter_complex
+    assert "xfade=transition=slideleft" in filter_complex
+    assert "colorchannelmixer=aa=0.400" in filter_complex
+    assert "overlay=shortest=1" in filter_complex
+    assert "unsharp=5:5:0.5" in filter_complex

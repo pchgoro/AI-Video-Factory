@@ -247,6 +247,30 @@ exports/series/chapter.txt
 
 `chapter.txt` には、各動画の開始時刻とタイトルを保存します。現時点では動画へのチャプター埋め込みは行いません。
 
+## Cinematic Motion Engine
+
+Phase6.5では、静止画から作る動画にFFmpegだけで映画風・ドキュメンタリー風の動きを付けられるようにしました。OpenAI API、画像生成API、動画生成AIは使用しません。
+
+設定画面で変更できる項目:
+
+- Motion Style: `Static`, `Slow Zoom In`, `Slow Zoom Out`, `Pan Left`, `Pan Right`, `Pan Up`, `Pan Down`, `Ken Burns`, `Random Motion`
+- ズーム速度: `Slow`, `Normal`, `Fast`
+- トランジション: `Fade`, `Cross Fade`, `Zoom Fade`, `Slide`, `None`
+- 宇宙オーバーレイ透明度: 10〜50%
+- Light Effect: `OFF`, `Lens Flare`, `Glow`, `Soft Light`
+
+`Random Motion` では、画像ごとに異なる演出を自動で割り当てます。同じ演出が連続しないようにし、`image_prompts.txt` にブラックホール、銀河、宇宙船などの語がある場合はシーン内容に合う動きを優先します。
+
+Overlayの使い方:
+
+1. `assets/overlay` に `mp4`, `png`, `jpg`, `jpeg`, `webp` を入れます。
+2. 設定画面で透明度を調整します。
+3. 動画生成時に本編へ自動で重ねます。
+
+素材管理の取り込み済み画像一覧には、`001.png / Zoom In` のように画像ごとのMotion名が表示されます。
+
+動画生成の処理順は、Motion、字幕/タイトル、BGM、完成動画です。
+
 ## Analytics
 
 Phase7では、上部に「Analytics」タブを追加しました。YouTube Studio / TikTok Studio からエクスポートしたCSVを読み込むだけで、チャンネル運営用の分析を確認できます。YouTube APIやTikTok APIは使用しません。
@@ -479,6 +503,7 @@ FFmpegの字幕フィルターで失敗している可能性があります。`s
 
 - 0.7.1 Phase7.1: AIアドバイザー、Rule Engineによるおすすめテーマ/タイトル、制作目標、バッジ、改善提案に対応
 - 0.7.0 Phase7: Analyticsタブ、CSV分析、ランキング、ジャンル分析、タイトル分析、グラフ、評価、CSVエクスポートに対応
+- 0.6.5 Phase6.5: Cinematic Motion Engine、Random Motion、Ken Burns、トランジション、Overlay、Light Effectに対応
 - 0.6.0 Phase6: オープニング/エンディング自動追加、ジャンル別の総集編動画生成、順番変更、chapter.txt生成に対応
 - 0.5.3.5 Phase5.3.5: 左側プロジェクト一覧と素材管理の取り込み済み画像エリアを縦幅調整可能に変更し、取り込み済み画像の高さ入力を追加
 - 0.5.3.4 Phase5.3.4: YouTube/TikTok別のタグ保存、hashtags.txtからの自動入力、制作メモ、テーマ/タグのワンクリックコピーに対応

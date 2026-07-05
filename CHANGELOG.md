@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.6.5
+- Motion Engineを追加
+- Ken BurnsとRandom Motionに対応
+- 画像ごとの自動Motion割り当てを追加
+- トランジションを追加
+- `assets/overlay` によるOverlayに対応
+- Light Effectを追加
+
 ## v0.7.1
 - AIアドバイザーを追加
 - Rule Engineによるおすすめテーマ提案を追加

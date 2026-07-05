@@ -1686,13 +1686,16 @@ class MainWindow(QMainWindow):
                 widget.deleteLater()
         if self.current_project is None:
             return
-        for image_path in self.image_import_service.list_images(self.current_project.path):
+        images = self.image_import_service.list_images(self.current_project.path)
+        motions = self.video_render_service._determine_image_motions(self.current_project, len(images), self.settings.motion_style)
+        for index, image_path in enumerate(images):
+            motion = motions[index] if index < len(motions) else self.settings.motion_style
             self.image_thumbnail_layout.insertWidget(
                 self.image_thumbnail_layout.count() - 1,
-                self._image_thumbnail_row(image_path),
+                self._image_thumbnail_row(image_path, motion),
             )
 
-    def _image_thumbnail_row(self, image_path: Path) -> QWidget:
+    def _image_thumbnail_row(self, image_path: Path, motion: str = "") -> QWidget:
         row = QFrame()
         row.setFrameShape(QFrame.StyledPanel)
         layout = QHBoxLayout(row)
@@ -1704,7 +1707,7 @@ class MainWindow(QMainWindow):
         preview.setAlignment(Qt.AlignCenter)
         layout.addWidget(preview)
 
-        name_label = QLabel(image_path.name)
+        name_label = QLabel(f"{image_path.name}\n{motion or 'Static'}")
         name_label.setMinimumWidth(90)
         layout.addWidget(name_label)
 

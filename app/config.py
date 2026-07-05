@@ -47,6 +47,10 @@ class AppPaths:
         return self.assets_dir / "ending"
 
     @property
+    def overlay_dir(self) -> Path:
+        return self.assets_dir / "overlay"
+
+    @property
     def logs_dir(self) -> Path:
         return self.base_dir / "logs"
 
@@ -84,6 +88,7 @@ class AppPaths:
             self.bgm_dir,
             self.intro_dir,
             self.ending_dir,
+            self.overlay_dir,
             self.logs_dir,
             self.samples_dir,
             self.sample_images_dir,

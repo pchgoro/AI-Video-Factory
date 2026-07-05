@@ -32,6 +32,11 @@ def test_settings_roundtrip(tmp_path) -> None:
     settings.title_padding = 20
     settings.title_width_percent = 85
     settings.title_line_spacing = 15
+    settings.motion_style = "Ken Burns"
+    settings.zoom_speed = "Fast"
+    settings.transition_type = "Slide"
+    settings.overlay_opacity = 40
+    settings.light_effect = "Glow"
     settings.image_common_conditions = "・9:16\n・4K\n・no text"
     service.save(settings)
     loaded = service.load()
@@ -57,4 +62,9 @@ def test_settings_roundtrip(tmp_path) -> None:
     assert loaded.title_padding == 20
     assert loaded.title_width_percent == 85
     assert loaded.title_line_spacing == 15
+    assert loaded.motion_style == "Ken Burns"
+    assert loaded.zoom_speed == "Fast"
+    assert loaded.transition_type == "Slide"
+    assert loaded.overlay_opacity == 40
+    assert loaded.light_effect == "Glow"
     assert loaded.image_common_conditions == "・9:16\n・4K\n・no text"

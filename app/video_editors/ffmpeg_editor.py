@@ -41,28 +41,57 @@ class FFmpegEditor(VideoEditor):
         input_args: list[str] = []
         filter_parts: list[str] = []
         video_labels: list[str] = []
+        segment_duration = seconds_per_image
+        transition_duration = self._transition_duration(request.transition_type, seconds_per_image, len(images))
+        input_duration = segment_duration + (transition_duration if transition_duration else 0.0)
         for index, image in enumerate(images):
-            input_args.extend(["-loop", "1", "-t", f"{seconds_per_image:.3f}", "-i", str(image)])
+            input_args.extend(["-loop", "1", "-t", f"{input_duration:.3f}", "-i", str(image)])
             label = f"v{index}"
             video_labels.append(f"[{label}]")
-            filter_parts.append(self._image_filter(index, label, request, frames_per_image))
-
-        concat_inputs = "".join(video_labels)
-        if request.subtitles_path and request.subtitles_path.exists():
-            subtitles_filter = self._subtitles_filter(request.subtitles_path)
-            filter_parts.append(f"{concat_inputs}concat=n={len(images)}:v=1:a=0,format=yuv420p[vbase]")
-            filter_parts.append(f"[vbase]{subtitles_filter},format=yuv420p[vout]")
-        else:
-            filter_parts.append(f"{concat_inputs}concat=n={len(images)}:v=1:a=0,format=yuv420p[vout]")
+            filter_parts.append(self._image_filter(index, label, request, frames_per_image, input_duration))
 
         command = [self.ffmpeg_path, "-y", "-nostdin", *input_args]
+        next_input_index = len(images)
+        overlay_input_index: int | None = None
+        if request.overlay_path and request.overlay_path.exists():
+            overlay_input_index = next_input_index
+            next_input_index += 1
+            if request.overlay_path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
+                command.extend(["-loop", "1", "-t", f"{output_duration:.3f}", "-i", str(request.overlay_path)])
+            else:
+                command.extend(["-stream_loop", "-1", "-t", f"{output_duration:.3f}", "-i", str(request.overlay_path)])
+
+        merged_label = self._merge_video_segments(filter_parts, video_labels, len(images), request, transition_duration, segment_duration)
+        current_label = merged_label
+        if overlay_input_index is not None:
+            opacity = max(0.1, min(0.5, request.overlay_opacity / 100))
+            filter_parts.append(
+                f"[{overlay_input_index}:v]scale={request.width}:{request.height}:force_original_aspect_ratio=increase,"
+                f"crop={request.width}:{request.height},format=rgba,colorchannelmixer=aa={opacity:.3f}[overlay]"
+            )
+            filter_parts.append(f"{current_label}[overlay]overlay=shortest=1:format=auto[voverlay]")
+            current_label = "[voverlay]"
+
+        light_filter = self._light_effect_filter(request.light_effect)
+        if light_filter:
+            filter_parts.append(f"{current_label}{light_filter}[vlight]")
+            current_label = "[vlight]"
+
+        if request.subtitles_path and request.subtitles_path.exists():
+            subtitles_filter = self._subtitles_filter(request.subtitles_path)
+            filter_parts.append(f"{current_label}{subtitles_filter},format=yuv420p[vout]")
+        else:
+            filter_parts.append(f"{current_label}format=yuv420p[vout]")
+
         voice_input_index: int | None = None
         bgm_input_index: int | None = None
         if audio_file.exists():
-            voice_input_index = len(images)
+            voice_input_index = next_input_index
+            next_input_index += 1
             command.extend(["-i", str(audio_file)])
         if request.bgm_path and request.bgm_path.exists():
-            bgm_input_index = len(images) + (1 if voice_input_index is not None else 0)
+            bgm_input_index = next_input_index
+            next_input_index += 1
             command.extend(["-stream_loop", "-1", "-t", f"{output_duration:.3f}", "-i", str(request.bgm_path)])
 
         audio_output = self._build_audio_filter(
@@ -131,18 +160,104 @@ class FFmpegEditor(VideoEditor):
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             return None
 
-    def _image_filter(self, index: int, label: str, request: VideoEditRequest, frames_per_image: int) -> str:
+    def _image_filter(self, index: int, label: str, request: VideoEditRequest, frames_per_image: int, duration: float) -> str:
         base = f"[{index}:v]scale={request.width}:{request.height}:force_original_aspect_ratio=increase,crop={request.width}:{request.height}"
-        if not request.zoom_enabled:
-            return f"{base},setsar=1,fps={request.fps},trim=duration={frames_per_image / request.fps:.3f},setpts=PTS-STARTPTS[{label}]"
+        motion = request.image_motions[index] if index < len(request.image_motions) else "Static"
+        output_frames = max(frames_per_image, math.ceil(duration * request.fps))
+        if not request.zoom_enabled or motion == "Static":
+            return f"{base},setsar=1,fps={request.fps},trim=duration={duration:.3f},setpts=PTS-STARTPTS[{label}]"
+
+        strength = self._motion_strength(request.zoom_speed)
+        motion_frames = output_frames
+        zoom_in = f"1.0+{strength:.4f}*on/{motion_frames}"
+        zoom_out = f"1.0+{strength:.4f}-{strength:.4f}*on/{motion_frames}"
+        pan_zoom = "1.12"
+        center_x = "iw/2-(iw/zoom/2)"
+        center_y = "ih/2-(ih/zoom/2)"
+        x_expr = center_x
+        y_expr = center_y
+        z_expr = zoom_in
+        if motion == "Slow Zoom Out":
+            z_expr = zoom_out
+        elif motion == "Pan Left":
+            z_expr = pan_zoom
+            x_expr = f"(iw-iw/zoom)*on/{motion_frames}"
+        elif motion == "Pan Right":
+            z_expr = pan_zoom
+            x_expr = f"(iw-iw/zoom)*(1-on/{motion_frames})"
+        elif motion == "Pan Up":
+            z_expr = pan_zoom
+            y_expr = f"(ih-ih/zoom)*on/{motion_frames}"
+        elif motion == "Pan Down":
+            z_expr = pan_zoom
+            y_expr = f"(ih-ih/zoom)*(1-on/{motion_frames})"
+        elif motion == "Ken Burns":
+            z_expr = f"1.0+{strength:.4f}*on/{motion_frames}"
+            x_expr = f"(iw-iw/zoom)*on/{motion_frames}"
+            y_expr = f"(ih-ih/zoom)*(1-on/{motion_frames})"
 
         return (
             f"{base},setsar=1,"
-            f"zoompan=z='1.0+0.15*on/{frames_per_image}':"
-            f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-            f"d={frames_per_image}:s={request.width}x{request.height}:fps={request.fps},"
-            f"trim=duration={frames_per_image / request.fps:.3f},setpts=PTS-STARTPTS[{label}]"
+            f"zoompan=z='{z_expr}':"
+            f"x='{x_expr}':y='{y_expr}':"
+            f"d={output_frames}:s={request.width}x{request.height}:fps={request.fps},"
+            f"trim=duration={duration:.3f},setpts=PTS-STARTPTS[{label}]"
         )
+
+    def _merge_video_segments(
+        self,
+        filter_parts: list[str],
+        video_labels: list[str],
+        image_count: int,
+        request: VideoEditRequest,
+        transition_duration: float,
+        segment_duration: float,
+    ) -> str:
+        if transition_duration <= 0 or image_count <= 1:
+            concat_inputs = "".join(video_labels)
+            filter_parts.append(f"{concat_inputs}concat=n={image_count}:v=1:a=0,format=yuv420p[vmerged]")
+            return "[vmerged]"
+
+        transition = self._xfade_transition(request.transition_type)
+        current = video_labels[0]
+        for index in range(1, image_count):
+            output = f"[vx{index}]"
+            offset = max(0.0, segment_duration * index)
+            filter_parts.append(
+                f"{current}{video_labels[index]}xfade=transition={transition}:duration={transition_duration:.3f}:"
+                f"offset={offset:.3f},format=yuv420p{output}"
+            )
+            current = output
+        filter_parts.append(f"{current}trim=duration={segment_duration * image_count:.3f},setpts=PTS-STARTPTS[vmerged]")
+        return "[vmerged]"
+
+    def _transition_duration(self, transition_type: str, seconds_per_image: float, image_count: int) -> float:
+        if image_count <= 1 or transition_type == "None":
+            return 0.0
+        return min(0.75, max(0.25, seconds_per_image * 0.18))
+
+    def _xfade_transition(self, transition_type: str) -> str:
+        if transition_type == "Fade":
+            return "fadeblack"
+        if transition_type == "Slide":
+            return "slideleft"
+        return "fade"
+
+    def _motion_strength(self, zoom_speed: str) -> float:
+        if zoom_speed == "Slow":
+            return 0.08
+        if zoom_speed == "Fast":
+            return 0.22
+        return 0.15
+
+    def _light_effect_filter(self, light_effect: str) -> str:
+        if light_effect == "Lens Flare":
+            return ",drawbox=x=0:y=0:w=iw:h=ih:color=white@0.035:t=fill,drawbox=x=iw*0.60:y=ih*0.18:w=260:h=10:color=white@0.22:t=fill"
+        if light_effect == "Glow":
+            return ",eq=brightness=0.04:saturation=1.08,unsharp=5:5:0.5"
+        if light_effect == "Soft Light":
+            return ",eq=brightness=0.03:contrast=1.03:saturation=1.05"
+        return ""
 
     def _build_audio_filter(
         self,

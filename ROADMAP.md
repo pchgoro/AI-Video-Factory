@@ -304,6 +304,29 @@ AI Video Factory は、テーマを入力するだけでショート動画を半
 
 ---
 
+# Phase6.5（完了）
+
+## 目的
+
+静止画から生成する動画に映画風・ドキュメンタリー風の動きを追加する
+
+## 実装
+
+- Motion Style設定を追加
+- Static / Slow Zoom In / Slow Zoom Out / Pan / Ken Burns / Random Motion に対応
+- Random Motionで画像ごとに異なる演出を自動適用
+- 同じ演出が連続しないように制御
+- 画像プロンプトの内容に応じたScene Motionを反映
+- ズーム速度設定を追加
+- Fade / Cross Fade / Zoom Fade / Slide / None のトランジションに対応
+- `assets/overlay` フォルダを追加
+- mp4 / png / jpg / webp のオーバーレイ素材に対応
+- Light Effect設定を追加
+- 素材管理のサムネイル一覧にMotion名を表示
+- FFmpegのみでMotion Engineを実装
+
+---
+
 # Phase7（完了）
 
 ## 目的

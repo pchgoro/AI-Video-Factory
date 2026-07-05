@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -23,6 +23,12 @@ class VideoEditRequest:
     bgm_volume: float = 0.2
     voice_volume: float = 1.0
     subtitles_path: Path | None = None
+    image_motions: list[str] = field(default_factory=list)
+    zoom_speed: str = "Normal"
+    transition_type: str = "Cross Fade"
+    overlay_path: Path | None = None
+    overlay_opacity: int = 30
+    light_effect: str = "OFF"
 
 
 @dataclass(frozen=True)
