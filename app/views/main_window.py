@@ -53,7 +53,7 @@ from services.ai_advisor_service import AdvisorReport, AiAdvisorService
 from services.analytics_service import AnalyticsError, AnalyticsReport, AnalyticsService
 from services.image_import_service import ImageImportError, ImageImportService
 from services.parser import ChatGptAnswerParser, ChatGptParseError
-from services.compilation_service import CompilationService
+from services.compilation_service import BrandingSegmentOptions, CompilationService
 from services.project_service import ProjectService
 from services.prompt_builder import build_bulk_image_prompt, build_chatgpt_prompt
 from services.settings_service import SettingsService
@@ -1368,12 +1368,35 @@ class MainWindow(QMainWindow):
             return
         intro_path = self.compilation_service.first_asset(self.paths.intro_dir) if self.settings.intro_enabled else None
         ending_path = self.compilation_service.first_asset(self.paths.ending_dir) if self.settings.ending_enabled else None
+        bgm_path = None
+        if self.paths.bgm_dir.exists():
+            bgm_path = next(
+                (
+                    path
+                    for path in sorted(self.paths.bgm_dir.iterdir())
+                    if path.is_file() and path.suffix.lower() in {".mp3", ".wav"}
+                ),
+                None,
+            )
         result = self.compilation_service.create_series_compilation(
             selected_projects,
             self.paths.exports_dir / "series",
             intro_path=intro_path,
             ending_path=ending_path,
             output_name=self.compilation_genre_box.currentText() or None,
+            intro_options=BrandingSegmentOptions(
+                duration=self.settings.intro_duration_seconds,
+                motion=self.settings.intro_motion,
+                audio_mode=self.settings.intro_audio_mode,
+                bgm_volume=self.settings.intro_bgm_volume_percent / 100,
+            ),
+            ending_options=BrandingSegmentOptions(
+                duration=self.settings.ending_duration_seconds,
+                motion=self.settings.ending_motion,
+                audio_mode=self.settings.ending_audio_mode,
+                bgm_volume=self.settings.ending_bgm_volume_percent / 100,
+            ),
+            bgm_path=bgm_path,
         )
         if not result.success:
             QMessageBox.warning(self, "総集編作成エラー", result.message)

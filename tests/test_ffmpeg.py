@@ -78,9 +78,10 @@ def test_video_render_service_uses_intro_and_ending_when_enabled(tmp_path) -> No
     service = VideoRenderService(editor, AppSettings(intro_enabled=True, ending_enabled=True))
     captured: dict[str, object] = {}
 
-    def fake_concat(paths, output_path, *_args, **_kwargs):
+    def fake_concat(paths, output_path, *_args, **kwargs):
         captured["paths"] = paths
         captured["output_path"] = output_path
+        captured["segment_options"] = kwargs.get("segment_options")
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(b"final")
         return VideoEditResult(True, "ok", output_path)
@@ -93,6 +94,9 @@ def test_video_render_service_uses_intro_and_ending_when_enabled(tmp_path) -> No
     assert editor.request.output_path == project_dir / "video" / "final_body.mp4"
     assert captured["paths"] == [intro, project_dir / "video" / "final_body.mp4", ending]
     assert captured["output_path"] == project_dir / "video" / "final.mp4"
+    assert captured["segment_options"][intro].duration == 3
+    assert captured["segment_options"][intro].motion == "Slow Zoom In"
+    assert captured["segment_options"][ending].motion == "Slow Zoom Out"
 
 
 def test_video_render_service_skips_intro_and_ending_when_disabled(tmp_path) -> None:
@@ -286,3 +290,5 @@ def test_ffmpeg_command_applies_motion_transition_overlay_and_light(tmp_path, mo
     assert "colorchannelmixer=aa=0.400" in filter_complex
     assert "overlay=shortest=1" in filter_complex
     assert "unsharp=5:5:0.5" in filter_complex
+    assert "[voverlay]eq=brightness=0.04" in filter_complex
+    assert "[voverlay],eq" not in filter_complex

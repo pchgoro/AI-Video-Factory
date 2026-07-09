@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 
 from models import ProjectInfo
-from services.compilation_service import CompilationService
+from services.compilation_service import BrandingSegmentOptions, CompilationService
 
 
 def _fake_media(path, duration: float = 10.0) -> None:
@@ -63,6 +63,48 @@ def test_compilation_concat_multiple_with_intro_and_ending(tmp_path, monkeypatch
     assert "concat=n=4:v=1:a=1" in filter_complex
     assert str(intro) in command
     assert str(ending) in command
+
+
+def test_branding_controls_duration_motion_and_bgm(tmp_path, monkeypatch) -> None:
+    intro = tmp_path / "assets" / "intro" / "intro.png"
+    body = tmp_path / "body.mp4"
+    bgm = tmp_path / "assets" / "bgm" / "song.mp3"
+    output = tmp_path / "final.mp4"
+    for path in [intro, body, bgm]:
+        _fake_media(path)
+    captured: dict[str, list[str]] = {}
+    service = CompilationService("ffmpeg")
+    monkeypatch.setattr("services.compilation_service.shutil.which", lambda _path: "ffmpeg")
+    monkeypatch.setattr(service, "media_duration", lambda _path: 10.0)
+    monkeypatch.setattr(service, "has_audio", lambda path: path == body)
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("services.compilation_service.subprocess.run", fake_run)
+    result = service.concat(
+        [intro, body],
+        output,
+        segment_options={
+            intro: BrandingSegmentOptions(
+                duration=4,
+                motion="Slow Zoom In",
+                audio_mode="BGM",
+                bgm_volume=0.25,
+            )
+        },
+        bgm_path=bgm,
+    )
+
+    assert result.success
+    command = captured["command"]
+    filter_complex = command[command.index("-filter_complex") + 1]
+    assert "4.000" in command
+    assert "zoompan=z='1.0+0.12*on/120'" in filter_complex
+    assert "volume=0.250" in filter_complex
+    assert "atrim=duration=4.000" in filter_complex
+    assert str(bgm) in command
 
 
 def test_compilation_failure_returns_japanese_error(tmp_path, monkeypatch) -> None:

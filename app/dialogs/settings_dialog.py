@@ -147,6 +147,50 @@ class SettingsDialog(QDialog):
 
         self.ending_enabled_check = QCheckBox("エンディングを使用する")
         self.ending_enabled_check.setChecked(settings.ending_enabled)
+        self.intro_duration_box = QSpinBox()
+        self.intro_duration_box.setRange(1, 60)
+        self.intro_duration_box.setValue(getattr(settings, "intro_duration_seconds", 3))
+        self.intro_duration_box.setSuffix(" 秒")
+
+        self.intro_motion_box = QComboBox()
+        self.intro_motion_box.addItems(["Static", "Slow Zoom In", "Slow Zoom Out"])
+        self.intro_motion_box.setCurrentText(getattr(settings, "intro_motion", "Slow Zoom In"))
+
+        self.intro_audio_mode_box = QComboBox()
+        self.intro_audio_mode_box.addItems(["Original", "BGM", "Original + BGM", "Mute"])
+        self.intro_audio_mode_box.setCurrentText(getattr(settings, "intro_audio_mode", "Original"))
+
+        self.intro_bgm_volume_box = QSpinBox()
+        self.intro_bgm_volume_box.setRange(0, 100)
+        self.intro_bgm_volume_box.setValue(getattr(settings, "intro_bgm_volume_percent", 20))
+        self.intro_bgm_volume_box.setSuffix("%")
+
+        self.ending_duration_box = QSpinBox()
+        self.ending_duration_box.setRange(1, 60)
+        self.ending_duration_box.setValue(getattr(settings, "ending_duration_seconds", 3))
+        self.ending_duration_box.setSuffix(" 秒")
+
+        self.ending_motion_box = QComboBox()
+        self.ending_motion_box.addItems(["Static", "Slow Zoom In", "Slow Zoom Out"])
+        self.ending_motion_box.setCurrentText(getattr(settings, "ending_motion", "Slow Zoom Out"))
+
+        self.ending_audio_mode_box = QComboBox()
+        self.ending_audio_mode_box.addItems(["Original", "BGM", "Original + BGM", "Mute"])
+        self.ending_audio_mode_box.setCurrentText(getattr(settings, "ending_audio_mode", "Original"))
+
+        self.ending_bgm_volume_box = QSpinBox()
+        self.ending_bgm_volume_box.setRange(0, 100)
+        self.ending_bgm_volume_box.setValue(getattr(settings, "ending_bgm_volume_percent", 20))
+        self.ending_bgm_volume_box.setSuffix("%")
+
+        form.addRow("イントロ表示時間", self.intro_duration_box)
+        form.addRow("イントロズーム", self.intro_motion_box)
+        form.addRow("イントロ音声", self.intro_audio_mode_box)
+        form.addRow("イントロBGM音量", self.intro_bgm_volume_box)
+        form.addRow("エンディング表示時間", self.ending_duration_box)
+        form.addRow("エンディングズーム", self.ending_motion_box)
+        form.addRow("エンディング音声", self.ending_audio_mode_box)
+        form.addRow("エンディングBGM音量", self.ending_bgm_volume_box)
         form.addRow("エンディング", self.ending_enabled_check)
 
         self.subtitles_enabled_check = QCheckBox("字幕を使用する")
@@ -285,6 +329,14 @@ class SettingsDialog(QDialog):
             bgm_volume_percent=self.bgm_volume_box.value(),
             intro_enabled=self.intro_enabled_check.isChecked(),
             ending_enabled=self.ending_enabled_check.isChecked(),
+            intro_duration_seconds=self.intro_duration_box.value(),
+            ending_duration_seconds=self.ending_duration_box.value(),
+            intro_motion=self.intro_motion_box.currentText(),
+            ending_motion=self.ending_motion_box.currentText(),
+            intro_audio_mode=self.intro_audio_mode_box.currentText(),
+            ending_audio_mode=self.ending_audio_mode_box.currentText(),
+            intro_bgm_volume_percent=self.intro_bgm_volume_box.value(),
+            ending_bgm_volume_percent=self.ending_bgm_volume_box.value(),
             subtitles_enabled=self.subtitles_enabled_check.isChecked(),
             subtitle_font_size=self.subtitle_font_size_box.value(),
             subtitle_position=self.subtitle_position_box.currentText(),

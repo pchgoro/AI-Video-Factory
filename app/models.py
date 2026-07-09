@@ -29,6 +29,14 @@ class AppSettings:
     bgm_volume_percent: int = 20
     intro_enabled: bool = False
     ending_enabled: bool = False
+    intro_duration_seconds: int = 3
+    ending_duration_seconds: int = 3
+    intro_motion: str = "Slow Zoom In"
+    ending_motion: str = "Slow Zoom Out"
+    intro_audio_mode: str = "Original"
+    ending_audio_mode: str = "Original"
+    intro_bgm_volume_percent: int = 20
+    ending_bgm_volume_percent: int = 20
     subtitles_enabled: bool = True
     subtitle_font_size: int = 64
     subtitle_position: str = "下"

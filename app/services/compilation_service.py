@@ -18,6 +18,14 @@ class CompilationChapter:
     title: str
 
 
+@dataclass(frozen=True)
+class BrandingSegmentOptions:
+    duration: float = 3.0
+    motion: str = "Static"
+    audio_mode: str = "Original"
+    bgm_volume: float = 0.2
+
+
 class CompilationService:
     """Create branded and compilation videos from existing media with FFmpeg."""
 
@@ -45,6 +53,8 @@ class CompilationService:
         output_path: Path,
         chapter_path: Path | None = None,
         chapters: list[CompilationChapter] | None = None,
+        segment_options: dict[Path, BrandingSegmentOptions] | None = None,
+        bgm_path: Path | None = None,
     ) -> VideoEditResult:
         valid_paths = [path for path in media_paths if path.exists() and path.suffix.lower() in self.ASSET_EXTENSIONS]
         if not valid_paths:
@@ -56,22 +66,73 @@ class CompilationService:
         command = [self.ffmpeg_path, "-y", "-nostdin"]
         filter_parts: list[str] = []
         concat_inputs: list[str] = []
+        options_by_path = segment_options or {}
+        durations: list[float | None] = []
 
         for index, path in enumerate(valid_paths):
-            duration = self.media_duration(path)
+            options = options_by_path.get(path)
+            duration = options.duration if options is not None else self.media_duration(path)
             is_image = path.suffix.lower() in self.IMAGE_EXTENSIONS
             if is_image:
                 duration = duration or 3.0
                 command.extend(["-loop", "1", "-t", f"{duration:.3f}", "-i", str(path)])
+            elif options is not None:
+                command.extend(["-stream_loop", "-1", "-t", f"{duration:.3f}", "-i", str(path)])
             else:
                 command.extend(["-i", str(path)])
+            durations.append(duration)
 
-            filter_parts.append(
+        bgm_input_indexes: dict[int, int] = {}
+        if bgm_path is not None and bgm_path.exists():
+            for index, path in enumerate(valid_paths):
+                options = options_by_path.get(path)
+                if options is None or "BGM" not in options.audio_mode:
+                    continue
+                bgm_input_indexes[index] = len(valid_paths) + len(bgm_input_indexes)
+                command.extend(["-stream_loop", "-1", "-t", f"{options.duration:.3f}", "-i", str(bgm_path)])
+
+        for index, path in enumerate(valid_paths):
+            options = options_by_path.get(path)
+            duration = durations[index]
+            video_filter = (
                 f"[{index}:v]scale={self.width}:{self.height}:force_original_aspect_ratio=increase,"
-                f"crop={self.width}:{self.height},setsar=1,fps={self.fps},format=yuv420p[v{index}]"
+                f"crop={self.width}:{self.height},setsar=1,fps={self.fps}"
             )
-            if self.has_audio(path):
-                filter_parts.append(f"[{index}:a]aformat=sample_rates=48000:channel_layouts=stereo[a{index}]")
+            if options is not None and options.motion != "Static":
+                frames = max(1, int(options.duration * self.fps))
+                if options.motion == "Slow Zoom Out":
+                    zoom = f"1.12-0.12*on/{frames}"
+                else:
+                    zoom = f"1.0+0.12*on/{frames}"
+                video_filter += (
+                    f",zoompan=z='{zoom}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                    f"d=1:s={self.width}x{self.height}:fps={self.fps}"
+                )
+            if duration is not None:
+                video_filter += f",trim=duration={duration:.3f},setpts=PTS-STARTPTS"
+            video_filter += ",format=yuv420p"
+            filter_parts.append(f"{video_filter}[v{index}]")
+
+            use_original = options is None or "Original" in options.audio_mode
+            bgm_index = bgm_input_indexes.get(index)
+            source_has_audio = use_original and self.has_audio(path)
+            if source_has_audio:
+                source_audio = f"[{index}:a]aformat=sample_rates=48000:channel_layouts=stereo"
+                if duration is not None:
+                    source_audio += f",atrim=duration={duration:.3f},asetpts=PTS-STARTPTS"
+                filter_parts.append(f"{source_audio}[asrc{index}]")
+            if bgm_index is not None and options is not None:
+                volume = max(0.0, min(1.0, options.bgm_volume))
+                filter_parts.append(
+                    f"[{bgm_index}:a]volume={volume:.3f},atrim=duration={options.duration:.3f},"
+                    f"asetpts=PTS-STARTPTS[abgm{index}]"
+                )
+            if source_has_audio and bgm_index is not None:
+                filter_parts.append(f"[asrc{index}][abgm{index}]amix=inputs=2:duration=longest[a{index}]")
+            elif source_has_audio:
+                filter_parts.append(f"[asrc{index}]anull[a{index}]")
+            elif bgm_index is not None:
+                filter_parts.append(f"[abgm{index}]anull[a{index}]")
             else:
                 safe_duration = duration or 3.0
                 filter_parts.append(
@@ -113,6 +174,9 @@ class CompilationService:
         intro_path: Path | None = None,
         ending_path: Path | None = None,
         output_name: str | None = None,
+        intro_options: BrandingSegmentOptions | None = None,
+        ending_options: BrandingSegmentOptions | None = None,
+        bgm_path: Path | None = None,
     ) -> VideoEditResult:
         selected_projects = [project for project in projects if (project.path / "video" / "final.mp4").exists()]
         if not selected_projects:
@@ -127,7 +191,7 @@ class CompilationService:
         current_time = 0.0
         if intro_path is not None and intro_path.exists():
             media_paths.append(intro_path)
-            current_time += self.media_duration(intro_path) or 3.0
+            current_time += intro_options.duration if intro_options is not None else (self.media_duration(intro_path) or 3.0)
 
         for project in selected_projects:
             video_path = project.path / "video" / "final.mp4"
@@ -138,7 +202,19 @@ class CompilationService:
         if ending_path is not None and ending_path.exists():
             media_paths.append(ending_path)
 
-        return self.concat(media_paths, output_path, chapter_path, chapters)
+        segment_options: dict[Path, BrandingSegmentOptions] = {}
+        if intro_path is not None and intro_options is not None:
+            segment_options[intro_path] = intro_options
+        if ending_path is not None and ending_options is not None:
+            segment_options[ending_path] = ending_options
+        return self.concat(
+            media_paths,
+            output_path,
+            chapter_path,
+            chapters,
+            segment_options=segment_options,
+            bgm_path=bgm_path,
+        )
 
     def write_chapters(self, chapter_path: Path, chapters: list[CompilationChapter]) -> None:
         chapter_path.parent.mkdir(parents=True, exist_ok=True)

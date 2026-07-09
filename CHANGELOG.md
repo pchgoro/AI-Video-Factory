@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.6.5.1
+- Light Effect有効時のFFmpegフィルターエラーを修正
+- イントロ・エンディングの表示時間設定を追加
+- イントロ・エンディングのズーム設定を追加
+- 素材音声、BGM、素材音声+BGM、無音を個別に選択可能に変更
+- イントロ・エンディングのBGM音量設定を追加
+
 ## v0.6.5
 - Motion Engineを追加
 - Ken BurnsとRandom Motionに対応

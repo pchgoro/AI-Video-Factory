@@ -252,11 +252,11 @@ class FFmpegEditor(VideoEditor):
 
     def _light_effect_filter(self, light_effect: str) -> str:
         if light_effect == "Lens Flare":
-            return ",drawbox=x=0:y=0:w=iw:h=ih:color=white@0.035:t=fill,drawbox=x=iw*0.60:y=ih*0.18:w=260:h=10:color=white@0.22:t=fill"
+            return "drawbox=x=0:y=0:w=iw:h=ih:color=white@0.035:t=fill,drawbox=x=iw*0.60:y=ih*0.18:w=260:h=10:color=white@0.22:t=fill"
         if light_effect == "Glow":
-            return ",eq=brightness=0.04:saturation=1.08,unsharp=5:5:0.5"
+            return "eq=brightness=0.04:saturation=1.08,unsharp=5:5:0.5"
         if light_effect == "Soft Light":
-            return ",eq=brightness=0.03:contrast=1.03:saturation=1.05"
+            return "eq=brightness=0.03:contrast=1.03:saturation=1.05"
         return ""
 
     def _build_audio_filter(

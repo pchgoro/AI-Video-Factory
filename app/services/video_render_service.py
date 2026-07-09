@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from models import AppSettings, ProjectInfo
-from services.compilation_service import CompilationService
+from services.compilation_service import BrandingSegmentOptions, CompilationService
 from services.subtitle_service import SubtitleError, SubtitleService
 from video_editors.base import VideoEditRequest, VideoEditResult, VideoEditor
 
@@ -23,6 +23,7 @@ class VideoRenderService:
 
     def render_project(self, project: ProjectInfo) -> VideoEditResult:
         bgm_path = self._find_bgm_file(self._bgm_dir_for_project(project.path))
+        branding_bgm_path = self._first_bgm_file(self._bgm_dir_for_project(project.path))
         intro_path = self._find_intro_file(self._intro_dir_for_project(project.path))
         ending_path = self._find_ending_file(self._ending_dir_for_project(project.path))
         overlay_path = self._find_overlay_file(self._overlay_dir_for_project(project.path))
@@ -70,13 +71,38 @@ class VideoRenderService:
         if not request.output_path.exists():
             return VideoEditResult(False, "本編動画の生成に失敗しました。final_body.mp4 が見つかりません。", command=result.command)
         media_paths = [path for path in [intro_path, request.output_path, ending_path] if path is not None]
-        branded_result = self.compilation_service.concat(media_paths, output_path)
+        segment_options: dict[Path, BrandingSegmentOptions] = {}
+        if intro_path is not None:
+            segment_options[intro_path] = BrandingSegmentOptions(
+                duration=self.settings.intro_duration_seconds,
+                motion=self.settings.intro_motion,
+                audio_mode=self.settings.intro_audio_mode,
+                bgm_volume=max(0.0, min(1.0, self.settings.intro_bgm_volume_percent / 100)),
+            )
+        if ending_path is not None:
+            segment_options[ending_path] = BrandingSegmentOptions(
+                duration=self.settings.ending_duration_seconds,
+                motion=self.settings.ending_motion,
+                audio_mode=self.settings.ending_audio_mode,
+                bgm_volume=max(0.0, min(1.0, self.settings.ending_bgm_volume_percent / 100)),
+            )
+        branded_result = self.compilation_service.concat(
+            media_paths,
+            output_path,
+            segment_options=segment_options,
+            bgm_path=branding_bgm_path,
+        )
         if branded_result.success:
             return VideoEditResult(True, "video/final.mp4 を生成しました。", branded_result.output_path, branded_result.command)
         return branded_result
 
     def _find_bgm_file(self, bgm_dir: Path) -> Path | None:
-        if not self.settings.bgm_enabled or not bgm_dir.exists():
+        if not self.settings.bgm_enabled:
+            return None
+        return self._first_bgm_file(bgm_dir)
+
+    def _first_bgm_file(self, bgm_dir: Path) -> Path | None:
+        if not bgm_dir.exists():
             return None
         extensions = {".mp3", ".wav"}
         return next((path for path in sorted(bgm_dir.iterdir()) if path.is_file() and path.suffix.lower() in extensions), None)

@@ -16,6 +16,14 @@ def test_settings_roundtrip(tmp_path) -> None:
     settings.bgm_volume_percent = 35
     settings.intro_enabled = True
     settings.ending_enabled = True
+    settings.intro_duration_seconds = 4
+    settings.ending_duration_seconds = 6
+    settings.intro_motion = "Static"
+    settings.ending_motion = "Slow Zoom In"
+    settings.intro_audio_mode = "Original + BGM"
+    settings.ending_audio_mode = "Mute"
+    settings.intro_bgm_volume_percent = 25
+    settings.ending_bgm_volume_percent = 15
     settings.subtitles_enabled = False
     settings.subtitle_font_size = 72
     settings.subtitle_position = "中央"
@@ -46,6 +54,14 @@ def test_settings_roundtrip(tmp_path) -> None:
     assert loaded.bgm_volume_percent == 35
     assert loaded.intro_enabled is True
     assert loaded.ending_enabled is True
+    assert loaded.intro_duration_seconds == 4
+    assert loaded.ending_duration_seconds == 6
+    assert loaded.intro_motion == "Static"
+    assert loaded.ending_motion == "Slow Zoom In"
+    assert loaded.intro_audio_mode == "Original + BGM"
+    assert loaded.ending_audio_mode == "Mute"
+    assert loaded.intro_bgm_volume_percent == 25
+    assert loaded.ending_bgm_volume_percent == 15
     assert loaded.subtitles_enabled is False
     assert loaded.subtitle_font_size == 72
     assert loaded.subtitle_position == "中央"
