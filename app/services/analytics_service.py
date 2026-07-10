@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import csv
 import re
+import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from models import ProjectInfo
@@ -25,6 +27,19 @@ class AnalyticsRecord:
     platform: str = "CSV"
     project_name: str = ""
     rating: int = 1
+    video_id: str = ""
+    url: str = ""
+    watch_time_hours: float = 0.0
+    average_view_duration: float = 0.0
+    average_percentage_viewed: float = 0.0
+    impressions: int = 0
+    ctr: float = 0.0
+    subscriber_change: int = 0
+    shares: int = 0
+    saves: int = 0
+    completion_rate: float = 0.0
+    follower_change: int = 0
+    source_file: str = ""
 
     @property
     def like_rate(self) -> float:
@@ -72,6 +87,8 @@ class AnalyticsReport:
     word_metrics: list[WordMetric] = field(default_factory=list)
     pattern_metrics: list[GroupMetric] = field(default_factory=list)
     comments: list[str] = field(default_factory=list)
+    graph_rows: list[dict[str, object]] = field(default_factory=list)
+    totals: dict[str, object] = field(default_factory=dict)
 
 
 class AnalyticsService:
@@ -100,46 +117,23 @@ class AnalyticsService:
     }
 
     def import_csv(self, csv_path: Path, projects: list[ProjectInfo] | None = None) -> AnalyticsReport:
-        if not csv_path.exists():
-            raise AnalyticsError("CSVファイルが見つかりません。")
-        try:
-            with csv_path.open("r", encoding="utf-8-sig", newline="") as file:
-                rows = list(csv.DictReader(file))
-        except UnicodeDecodeError:
-            with csv_path.open("r", encoding="cp932", newline="") as file:
-                rows = list(csv.DictReader(file))
-        except OSError as exc:
-            raise AnalyticsError(f"CSVの読み込みに失敗しました: {exc}") from exc
+        return self.import_paths([csv_path], projects)
 
-        if not rows:
-            return self.build_report([])
+    def import_paths(self, paths: list[Path], projects: list[ProjectInfo] | None = None) -> AnalyticsReport:
+        from services.analytics_import_service import AnalyticsImportService
 
-        field_map = self._field_map(rows[0].keys())
-        if "title" not in field_map or "views" not in field_map:
-            raise AnalyticsError("CSVにタイトルまたは再生数の列がありません。")
-
+        dataset = AnalyticsImportService().import_paths(paths)
         project_index = self._project_index(projects or [])
-        records: list[AnalyticsRecord] = []
-        platform = self._detect_platform(csv_path, rows[0].keys())
-        for row in rows:
-            title = self._clean_text(row.get(field_map["title"], ""))
-            if not title:
-                continue
-            project = self._match_project(title, project_index)
-            genre = self._clean_text(row.get(field_map.get("genre", ""), "")) if "genre" in field_map else ""
-            record = AnalyticsRecord(
-                title=title,
-                views=self._parse_int(row.get(field_map["views"], "")),
-                likes=self._parse_int(row.get(field_map.get("likes", ""), "")) if "likes" in field_map else 0,
-                comments=self._parse_int(row.get(field_map.get("comments", ""), "")) if "comments" in field_map else 0,
-                posted_date=self._clean_text(row.get(field_map.get("posted_date", ""), "")) if "posted_date" in field_map else "",
-                genre=genre or (project.genre if project else "未分類"),
-                platform=platform,
-                project_name=project.name if project else "",
-            )
-            records.append(record)
-
-        return self.build_report(records)
+        for record in dataset.records:
+            project = self._match_project(record.title, project_index)
+            if project:
+                record.project_name = project.name
+                if not record.genre or record.genre == "未分類":
+                    record.genre = project.genre or "未分類"
+        report = self.build_report(dataset.records)
+        report.graph_rows = dataset.daily_rows
+        report.totals = dataset.totals
+        return report
 
     def build_report(self, records: list[AnalyticsRecord]) -> AnalyticsReport:
         summary = self._summary(records)
@@ -246,7 +240,11 @@ class AnalyticsService:
                 spine.set_color("#555555")
 
         dated = sorted(records, key=lambda item: self._date_key(item.posted_date))
-        axes[0][0].plot([item.posted_date or str(index + 1) for index, item in enumerate(dated)], [item.views for item in dated], marker="o")
+        if report.graph_rows:
+            graph_rows = sorted(report.graph_rows, key=lambda row: self._date_key(str(row.get("date", ""))))
+            axes[0][0].plot([str(row.get("date", "")) for row in graph_rows], [int(row.get("views") or 0) for row in graph_rows], marker="o")
+        else:
+            axes[0][0].plot([item.posted_date or str(index + 1) for index, item in enumerate(dated)], [item.views for item in dated], marker="o")
         axes[0][0].set_title("再生数推移")
         axes[0][0].tick_params(axis="x", rotation=35)
 
@@ -384,7 +382,8 @@ class AnalyticsService:
     def _project_index(self, projects: list[ProjectInfo]) -> dict[str, ProjectInfo]:
         index: dict[str, ProjectInfo] = {}
         for project in projects:
-            for value in [project.title, project.topic, project.name, project.series]:
+            video_names = [path.stem for path in (project.path / "video").glob("*.mp4")] if (project.path / "video").exists() else []
+            for value in [project.title, project.topic, project.name, project.series, *video_names]:
                 normalized = self._normalize_match_text(value)
                 if normalized:
                     index[normalized] = project
@@ -394,10 +393,16 @@ class AnalyticsService:
         normalized_title = self._normalize_match_text(title)
         if normalized_title in index:
             return index[normalized_title]
+        best_project: ProjectInfo | None = None
+        best_score = 0.0
         for key, project in index.items():
             if key and (key in normalized_title or normalized_title in key):
                 return project
-        return None
+            score = SequenceMatcher(None, normalized_title, key).ratio()
+            if score > best_score:
+                best_score = score
+                best_project = project
+        return best_project if best_score >= 0.72 else None
 
     def _detect_platform(self, path: Path, headers) -> str:
         haystack = f"{path.name} {' '.join(headers)}".lower()
@@ -419,7 +424,13 @@ class AnalyticsService:
         return re.sub(r"\s+", " ", str(value or "").strip().lower())
 
     def _normalize_match_text(self, value: str) -> str:
-        return re.sub(r"\s+", "", str(value or "").strip().lower())
+        text = unicodedata.normalize("NFKC", str(value or "")).strip().lower()
+        text = re.sub(r"#\s*shorts?\b", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"#\S+", "", text)
+        text = re.sub(r"[\U00010000-\U0010ffff]", "", text)
+        text = re.sub(r"[^\w一-龥ぁ-んァ-ンー]+", "", text)
+        text = re.sub(r"(第?\d+話|\d{1,4})$", "", text)
+        return re.sub(r"\s+", "", text)
 
     def _date_key(self, value: str) -> datetime:
         for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):

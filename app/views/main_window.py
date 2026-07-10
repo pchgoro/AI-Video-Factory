@@ -50,11 +50,13 @@ from dialogs.settings_dialog import SettingsDialog
 from models import DEFAULT_DURATIONS, PROGRESS_ITEMS, ProjectInfo, PromptTemplate, WIZARD_STEPS
 from services.dashboard_service import DashboardService
 from services.ai_advisor_service import AdvisorReport, AiAdvisorService
+from services.analytics_link_service import AnalyticsLinkService, AnalyticsLinkSummary
 from services.analytics_service import AnalyticsError, AnalyticsReport, AnalyticsService
 from services.image_import_service import ImageImportError, ImageImportService
 from services.parser import ChatGptAnswerParser, ChatGptParseError
 from services.compilation_service import BrandingSegmentOptions, CompilationService
 from services.project_service import ProjectService
+from services.project_analytics_service import ProjectAnalyticsReport, ProjectAnalyticsService
 from services.prompt_builder import build_bulk_image_prompt, build_chatgpt_prompt
 from services.settings_service import SettingsService
 from services.tag_service import TagService
@@ -144,8 +146,11 @@ class MainWindow(QMainWindow):
         self.image_import_service = ImageImportService()
         self.tag_service = TagService()
         self.analytics_service = AnalyticsService()
+        self.analytics_link_service = AnalyticsLinkService(self.paths.base_dir)
+        self.project_analytics_service = ProjectAnalyticsService()
         self.ai_advisor_service = AiAdvisorService()
         self.analytics_report = AnalyticsReport()
+        self.analytics_link_summary = AnalyticsLinkSummary()
         self.ai_advisor_report = AdvisorReport()
         self.settings = settings_service.load()
         self.compilation_service = CompilationService(self.settings.ffmpeg_path, self.settings.output_width, self.settings.output_height)
@@ -333,6 +338,27 @@ class MainWindow(QMainWindow):
             grid.addWidget(value, index // 3 * 2 + 1, index % 3)
         layout.addWidget(stats_box)
 
+        analytics_box = QGroupBox("Analyticsサマリー")
+        analytics_grid = QGridLayout(analytics_box)
+        self.dashboard_analytics_labels: dict[str, QLabel] = {}
+        analytics_items = [
+            ("youtube_views", "YouTube総再生数"),
+            ("tiktok_views", "TikTok総再生数"),
+            ("best_week", "今週の最高成績動画"),
+            ("unlinked", "未紐付け動画数"),
+            ("csv_posted", "投稿確認済み"),
+            ("improvement", "改善候補動画数"),
+            ("continuation", "続編推奨動画数"),
+        ]
+        for index, (key, label) in enumerate(analytics_items):
+            caption = QLabel(label)
+            value = QLabel("CSV未取込")
+            value.setStyleSheet("font-size: 16px; font-weight: 700; color: #ce9178;")
+            self.dashboard_analytics_labels[key] = value
+            analytics_grid.addWidget(caption, index // 3 * 2, index % 3)
+            analytics_grid.addWidget(value, index // 3 * 2 + 1, index % 3)
+        layout.addWidget(analytics_box)
+
         lists = QHBoxLayout()
         genre_box = QGroupBox("ジャンル別本数")
         genre_layout = QVBoxLayout(genre_box)
@@ -389,6 +415,7 @@ class MainWindow(QMainWindow):
         self.content_tabs.addTab(self._build_image_prompts_tab(), "画像プロンプト")
         self.content_tabs.addTab(self._build_bulk_image_prompt_tab(), "一括画像生成")
         self.content_tabs.addTab(self._build_assets_tab(), "素材管理")
+        self.content_tabs.addTab(self._build_project_analytics_tab(), "個別分析")
         self.content_tabs.addTab(self._build_video_preview_tab(), "完成動画プレビュー")
         layout.addWidget(self.content_tabs, stretch=2)
 
@@ -596,6 +623,27 @@ class MainWindow(QMainWindow):
         self.set_image_thumbnail_area_height(self.image_thumbnail_height_box.value())
         return panel
 
+    def _build_project_analytics_tab(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        action_row = QHBoxLayout()
+        refresh_button = QPushButton("個別分析を更新")
+        refresh_button.clicked.connect(self.refresh_project_analytics_view)
+        youtube_button = QPushButton("YouTube URLを開く")
+        youtube_button.clicked.connect(lambda _checked=False: self.open_project_analytics_url("YouTube"))
+        tiktok_button = QPushButton("TikTok URLを開く")
+        tiktok_button.clicked.connect(lambda _checked=False: self.open_project_analytics_url("TikTok"))
+        action_row.addWidget(refresh_button)
+        action_row.addWidget(youtube_button)
+        action_row.addWidget(tiktok_button)
+        action_row.addStretch()
+        layout.addLayout(action_row)
+        self.project_analytics_text = QTextEdit()
+        self.project_analytics_text.setReadOnly(True)
+        self.project_analytics_text.setPlaceholderText("CSVを読み込むと、このプロジェクトの個別成績と改善案が表示されます。")
+        layout.addWidget(self.project_analytics_text, stretch=1)
+        return panel
+
     def _build_video_preview_tab(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -660,11 +708,14 @@ class MainWindow(QMainWindow):
         action_row = QHBoxLayout()
         import_button = QPushButton("CSVを読み込む")
         import_button.clicked.connect(self.import_analytics_csv)
+        import_folder_button = QPushButton("CSVフォルダを読み込む")
+        import_folder_button.clicked.connect(self.import_analytics_folder)
         export_button = QPushButton("分析結果CSV保存")
         export_button.clicked.connect(self.export_analytics_csv)
         refresh_button = QPushButton("再表示")
         refresh_button.clicked.connect(self.refresh_analytics_view)
         action_row.addWidget(import_button)
+        action_row.addWidget(import_folder_button)
         action_row.addWidget(export_button)
         action_row.addWidget(refresh_button)
         action_row.addStretch()
@@ -692,6 +743,24 @@ class MainWindow(QMainWindow):
             summary_grid.addWidget(caption, index // 3 * 2, index % 3)
             summary_grid.addWidget(value, index // 3 * 2 + 1, index % 3)
         layout.addWidget(summary_box)
+
+        link_box = QGroupBox("Project Analytics")
+        link_grid = QGridLayout(link_box)
+        self.analytics_link_labels: dict[str, QLabel] = {}
+        link_items = [
+            ("linked", "紐付け済み動画数"),
+            ("unlinked", "未紐付け動画数"),
+            ("rate", "紐付け率"),
+            ("platforms", "YouTube / TikTok別"),
+        ]
+        for index, (key, label) in enumerate(link_items):
+            caption = QLabel(label)
+            value = QLabel("-")
+            value.setStyleSheet("font-size: 16px; font-weight: 700; color: #ce9178;")
+            self.analytics_link_labels[key] = value
+            link_grid.addWidget(caption, index // 2 * 2, index % 2)
+            link_grid.addWidget(value, index // 2 * 2 + 1, index % 2)
+        layout.addWidget(link_box)
 
         search_box = QGroupBox("検索")
         search_layout = QGridLayout(search_box)
@@ -749,12 +818,35 @@ class MainWindow(QMainWindow):
         self.analytics_records_text.setReadOnly(True)
         self.analytics_comments_text = QTextEdit()
         self.analytics_comments_text.setReadOnly(True)
+        self.analytics_project_text = QTextEdit()
+        self.analytics_project_text.setReadOnly(True)
+        unmatched_panel = QWidget()
+        unmatched_layout = QVBoxLayout(unmatched_panel)
+        self.analytics_linked_list = QListWidget()
+        self.analytics_unmatched_list = QListWidget()
+        self.analytics_project_combo = QComboBox()
+        link_buttons = QHBoxLayout()
+        save_link_button = QPushButton("紐付け保存")
+        save_link_button.clicked.connect(self.save_manual_analytics_link)
+        unlink_button = QPushButton("紐付け解除")
+        unlink_button.clicked.connect(self.remove_manual_analytics_link)
+        link_buttons.addWidget(QLabel("紐付け先"))
+        link_buttons.addWidget(self.analytics_project_combo, stretch=1)
+        link_buttons.addWidget(save_link_button)
+        link_buttons.addWidget(unlink_button)
+        unmatched_layout.addWidget(QLabel("紐付け済み動画一覧"))
+        unmatched_layout.addWidget(self.analytics_linked_list, stretch=1)
+        unmatched_layout.addWidget(QLabel("未紐付け動画一覧"))
+        unmatched_layout.addWidget(self.analytics_unmatched_list, stretch=1)
+        unmatched_layout.addLayout(link_buttons)
 
         self.analytics_tabs.addTab(graph_panel, "グラフ")
         self.analytics_tabs.addTab(self.analytics_ranking_text, "ランキング")
         self.analytics_tabs.addTab(self.analytics_genre_text, "ジャンル分析")
         self.analytics_tabs.addTab(self.analytics_title_text, "タイトル分析")
         self.analytics_tabs.addTab(self.analytics_records_text, "動画一覧")
+        self.analytics_tabs.addTab(self.analytics_project_text, "プロジェクト別成績")
+        self.analytics_tabs.addTab(unmatched_panel, "未紐付け管理")
         self.analytics_tabs.addTab(self.analytics_comments_text, "コメント")
         layout.addWidget(self.analytics_tabs, stretch=1)
         self.refresh_analytics_view()
@@ -891,26 +983,65 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(self._project_display_name(project))
             item.setData(Qt.UserRole, str(project.path))
             self.recent_list.addItem(item)
+        self.refresh_dashboard_analytics()
+
+    def refresh_dashboard_analytics(self) -> None:
+        if not hasattr(self, "dashboard_analytics_labels"):
+            return
+        if not self.analytics_report.records:
+            for label in self.dashboard_analytics_labels.values():
+                label.setText("CSV未取込")
+            return
+        youtube_views = sum(record.views for record in self.analytics_report.records if record.platform == "YouTube")
+        tiktok_views = sum(record.views for record in self.analytics_report.records if record.platform == "TikTok")
+        best = max(self.analytics_report.records, key=lambda record: record.views, default=None)
+        improvement_count = sum(1 for record in self.analytics_report.records if record.rating <= 2)
+        continuation_count = sum(1 for record in self.analytics_report.records if record.rating >= 4 and record.project_name)
+        csv_posted = len({record.project_name for record in self.analytics_report.records if record.project_name})
+        values = {
+            "youtube_views": f"{youtube_views:,}",
+            "tiktok_views": f"{tiktok_views:,}",
+            "best_week": f"{best.title} ({best.views:,}回)" if best else "CSV未取込",
+            "unlinked": str(self.analytics_link_summary.unlinked_count),
+            "csv_posted": str(csv_posted),
+            "improvement": str(improvement_count),
+            "continuation": str(continuation_count),
+        }
+        for key, value in values.items():
+            self.dashboard_analytics_labels[key].setText(value)
 
     def import_analytics_csv(self) -> None:
-        file_path, _selected_filter = QFileDialog.getOpenFileName(
+        file_paths, _selected_filter = QFileDialog.getOpenFileNames(
             self,
             "分析するCSVを選択",
             str(self.paths.base_dir),
             "CSVファイル (*.csv)",
         )
-        if not file_path:
+        if not file_paths:
             return
+        self._import_analytics_paths([Path(path) for path in file_paths])
+
+    def import_analytics_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "CSVフォルダを選択", str(self.paths.base_dir))
+        if not folder:
+            return
+        self._import_analytics_paths([Path(folder)])
+
+    def _import_analytics_paths(self, paths: list[Path]) -> None:
         try:
-            self.analytics_report = self.analytics_service.import_csv(Path(file_path), self.projects)
+            self.analytics_report = self.analytics_service.import_paths(paths, self.projects)
+            self.analytics_link_summary = self.analytics_link_service.apply_links(self.analytics_report.records, self.projects)
+            self.project_analytics_service.save_project_analytics(self.projects, self.analytics_report.records)
             graph_path = self.paths.exports_dir / "analytics_dashboard.png"
             self.analytics_service.render_dashboard_graphs(self.analytics_report, graph_path)
         except AnalyticsError as exc:
             QMessageBox.warning(self, "Analyticsエラー", str(exc))
             return
+        self.projects = self.project_service.list_projects()
         self.refresh_analytics_view()
         self.refresh_ai_advisor_view()
-        QMessageBox.information(self, "Analytics", "CSVを読み込みました。")
+        self.refresh_project_analytics_view()
+        QMessageBox.information(self, "Analytics", "CSVを読み込み、プロジェクト紐付けを更新しました。")
 
     def export_analytics_csv(self) -> None:
         if not self.analytics_report.records:
@@ -949,11 +1080,29 @@ class MainWindow(QMainWindow):
         }
         for key, value in values.items():
             self.analytics_summary_labels[key].setText(value)
+        if hasattr(self, "analytics_link_labels"):
+            self.analytics_link_summary = self.analytics_link_service.apply_links(report.records, self.projects)
+            platform_text = " / ".join(
+                f"{platform}: {linked}/{total}"
+                for platform, (linked, total) in self.analytics_link_summary.platform_counts().items()
+            ) or "-"
+            link_values = {
+                "linked": str(self.analytics_link_summary.linked_count),
+                "unlinked": str(self.analytics_link_summary.unlinked_count),
+                "rate": f"{self.analytics_link_summary.link_rate:.1f}%",
+                "platforms": platform_text,
+            }
+            for key, value in link_values.items():
+                self.analytics_link_labels[key].setText(value)
+            self.refresh_dashboard_analytics()
 
         self.analytics_ranking_text.setPlainText(self._analytics_ranking_text(report))
         self.analytics_genre_text.setPlainText(self._analytics_genre_text(report))
         self.analytics_title_text.setPlainText(self._analytics_title_text(report))
         self.analytics_comments_text.setPlainText("\n".join(report.comments))
+        if hasattr(self, "analytics_project_text"):
+            self.analytics_project_text.setPlainText(self._analytics_project_text())
+            self.refresh_analytics_link_controls()
         self.apply_analytics_filters()
         graph_path = self.paths.exports_dir / "analytics_dashboard.png"
         if graph_path.exists():
@@ -963,6 +1112,7 @@ class MainWindow(QMainWindow):
                     pixmap.scaled(self.analytics_graph_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 )
         self.refresh_ai_advisor_view()
+        self.refresh_project_analytics_view()
 
     def refresh_ai_advisor_view(self) -> None:
         if not hasattr(self, "ai_today_text"):
@@ -1062,12 +1212,169 @@ class MainWindow(QMainWindow):
 
     def _analytics_record_line(self, record) -> str:
         stars = "★" * record.rating + "☆" * (5 - record.rating)
+        project = f" / project: {record.project_name}" if record.project_name else " / project: 未紐付け"
         return (
             f"{stars}  {record.title}\n"
             f"  ジャンル: {record.genre} / 再生数: {record.views:,} / いいね: {record.likes:,} "
             f"/ コメント: {record.comments:,} / いいね率: {record.like_rate:.2f}% / コメント率: {record.comment_rate:.2f}% "
-            f"/ 投稿日: {record.posted_date or '-'}"
+            f"/ 投稿日: {record.posted_date or '-'}{project}"
         )
+
+    def _analytics_project_text(self) -> str:
+        if not self.analytics_report.records:
+            return "CSVを読み込むとプロジェクト別成績が表示されます。"
+        lines = [
+            "【紐付け状況】",
+            f"紐付け済み: {self.analytics_link_summary.linked_count}",
+            f"未紐付け: {self.analytics_link_summary.unlinked_count}",
+            f"紐付け率: {self.analytics_link_summary.link_rate:.1f}%",
+            "",
+            "【プロジェクト別成績】",
+        ]
+        grouped: dict[str, list] = {}
+        for record in self.analytics_report.records:
+            grouped.setdefault(record.project_name or "未紐付け", []).append(record)
+        for project_name, records in sorted(grouped.items()):
+            views = sum(record.views for record in records)
+            likes = sum(record.likes for record in records)
+            comments = sum(record.comments for record in records)
+            lines.append(f"{project_name}: {len(records)}件 / 再生 {views:,} / いいね {likes:,} / コメント {comments:,}")
+            for record in records:
+                lines.append(f"  - {record.platform}: {record.title} ({record.views:,}回)")
+        return "\n".join(lines)
+
+    def refresh_analytics_link_controls(self) -> None:
+        if not hasattr(self, "analytics_unmatched_list"):
+            return
+        self.analytics_unmatched_list.clear()
+        self.analytics_linked_list.clear()
+        for record in self.analytics_report.records:
+            if record.project_name:
+                item = QListWidgetItem(f"{record.platform}: {record.title} -> {record.project_name}")
+                item.setData(Qt.UserRole, self.analytics_link_service.record_key(record))
+                self.analytics_linked_list.addItem(item)
+                continue
+            item = QListWidgetItem(f"{record.platform}: {record.title}")
+            item.setData(Qt.UserRole, self.analytics_link_service.record_key(record))
+            self.analytics_unmatched_list.addItem(item)
+        current_project = self.analytics_project_combo.currentText() if hasattr(self, "analytics_project_combo") else ""
+        self.analytics_project_combo.blockSignals(True)
+        self.analytics_project_combo.clear()
+        for project in self.projects:
+            self.analytics_project_combo.addItem(project.title or project.topic or project.name, project.name)
+        if current_project:
+            self.analytics_project_combo.setCurrentText(current_project)
+        self.analytics_project_combo.blockSignals(False)
+
+    def save_manual_analytics_link(self) -> None:
+        record = self._selected_unmatched_record()
+        if record is None:
+            QMessageBox.warning(self, "Analyticsエラー", "紐付ける未紐付け動画を選択してください。")
+            return
+        project_name = self.analytics_project_combo.currentData()
+        if not project_name:
+            QMessageBox.warning(self, "Analyticsエラー", "紐付け先プロジェクトを選択してください。")
+            return
+        self.analytics_link_service.save_manual_link(record, str(project_name))
+        record.project_name = str(project_name)
+        self.analytics_link_summary = self.analytics_link_service.apply_links(self.analytics_report.records, self.projects)
+        self.project_analytics_service.save_project_analytics(self.projects, self.analytics_report.records)
+        self.refresh_analytics_view()
+        QMessageBox.information(self, "Analytics", "手動紐付けを保存しました。")
+
+    def remove_manual_analytics_link(self) -> None:
+        record = self._selected_analytics_record_for_unlink()
+        if record is None:
+            QMessageBox.warning(self, "Analyticsエラー", "解除する動画を選択してください。未紐付け一覧または動画一覧の対象を選び直してください。")
+            return
+        self.analytics_link_service.remove_manual_link(record)
+        record.project_name = ""
+        self.analytics_link_summary = self.analytics_link_service.apply_links(self.analytics_report.records, self.projects)
+        self.refresh_analytics_view()
+        QMessageBox.information(self, "Analytics", "手動紐付けを解除しました。")
+
+    def _selected_unmatched_record(self):
+        selected = self.analytics_unmatched_list.currentItem() if hasattr(self, "analytics_unmatched_list") else None
+        if selected is None:
+            return None
+        key = selected.data(Qt.UserRole)
+        return next((record for record in self.analytics_report.records if self.analytics_link_service.record_key(record) == key), None)
+
+    def _selected_analytics_record_for_unlink(self):
+        selected = self.analytics_linked_list.currentItem() if hasattr(self, "analytics_linked_list") else None
+        if selected is None:
+            return None
+        key = selected.data(Qt.UserRole)
+        return next((record for record in self.analytics_report.records if self.analytics_link_service.record_key(record) == key), None)
+
+    def refresh_project_analytics_view(self) -> None:
+        if not hasattr(self, "project_analytics_text"):
+            return
+        if self.current_project is None:
+            self.project_analytics_text.setPlainText("プロジェクトを選択してください。")
+            return
+        report = self.project_analytics_service.build_project_report(self.current_project, self.analytics_report, self.topics)
+        self.project_analytics_text.setPlainText(self._project_analytics_report_text(report))
+
+    def open_project_analytics_url(self, platform: str) -> None:
+        if self.current_project is None:
+            return
+        report = self.project_analytics_service.build_project_report(self.current_project, self.analytics_report, self.topics)
+        record = report.youtube if platform == "YouTube" else report.tiktok
+        if not record or not record.url:
+            QMessageBox.information(self, "Analytics", f"{platform} URLは未取得です。")
+            return
+        webbrowser.open(record.url)
+
+    def _project_analytics_report_text(self, report: ProjectAnalyticsReport) -> str:
+        lines = [f"個別分析: {report.project.title or report.project.topic or report.project.name}", ""]
+        lines.extend(self._platform_project_lines("YouTube", report.youtube, report.youtube_insight))
+        lines.append("")
+        lines.extend(self._platform_project_lines("TikTok", report.tiktok, report.tiktok_insight))
+        lines.append("")
+        lines.append("【YouTube / TikTok 横断比較】")
+        lines.extend(f"・{line}" for line in report.cross_platform_comments)
+        lines.append("")
+        lines.append("【続編候補】")
+        lines.extend([f"・{topic}" for topic in report.continuation_topics] or ["分析データ不足"])
+        return "\n".join(lines)
+
+    def _platform_project_lines(self, platform: str, record, insight) -> list[str]:
+        stars = "★" * insight.rating + "☆" * (5 - insight.rating)
+        if record is None:
+            return [f"【{platform}】", "投稿状態: 未投稿または未取得", "データ: 未取得"]
+        if platform == "YouTube":
+            metrics = [
+                f"投稿状態: CSVから投稿確認済み",
+                f"公開日: {record.posted_date or '未取得'}",
+                f"URL: {record.url or '未取得'}",
+                f"視聴回数: {record.views:,}",
+                f"高評価数: {record.likes:,}",
+                f"コメント数: {record.comments:,}",
+                f"CTR: {record.ctr:.2f}%" if record.ctr else "CTR: 未取得",
+                f"平均視聴時間: {record.average_view_duration:.1f}秒" if record.average_view_duration else "平均視聴時間: 未取得",
+                f"平均視聴率: {record.average_percentage_viewed:.2f}%" if record.average_percentage_viewed else "平均視聴率: 未取得",
+                f"登録者増減: {record.subscriber_change:,}",
+            ]
+        else:
+            metrics = [
+                f"投稿状態: CSVから投稿確認済み",
+                f"投稿日: {record.posted_date or '未取得'}",
+                f"URL: {record.url or '未取得'}",
+                f"視聴回数: {record.views:,}",
+                f"いいね数: {record.likes:,}",
+                f"コメント数: {record.comments:,}",
+                f"シェア数: {record.shares:,}",
+                f"保存数: {record.saves:,}",
+                f"平均視聴時間: {record.average_view_duration:.1f}秒" if record.average_view_duration else "平均視聴時間: 未取得",
+                f"完視聴率: {record.completion_rate:.2f}%" if record.completion_rate else "完視聴率: 未取得",
+                f"フォロワー増減: {record.follower_change:,}",
+            ]
+        lines = [f"【{platform}】", *metrics, f"評価: {stars} {insight.label}", "伸びた理由:"]
+        lines.extend(f"・{line}" for line in insight.reasons)
+        lines.append("次回改善案:")
+        lines.extend(f"・{line}" for line in insight.improvements)
+        return lines
 
     def refresh_project_list(self) -> None:
         keyword = self.project_search.text().strip().lower()
@@ -1162,6 +1469,7 @@ class MainWindow(QMainWindow):
         self.update_asset_list()
         self.update_image_prompt_list()
         self.update_video_preview()
+        self.refresh_project_analytics_view()
         self.update_wizard()
         self.status_label.setText(f"プロジェクトを開きました: {self.current_project.name}")
 
