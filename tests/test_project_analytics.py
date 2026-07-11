@@ -54,10 +54,10 @@ def test_youtube_studio_japanese_columns_keep_title_and_id_separate(tmp_path) ->
     total = tmp_path / "合計.csv"
     _write_csv(
         table,
-        ["コンテンツ", "動画のタイトル", "動画公開時刻", "長さ", "視聴回数", "総再生時間（単位: 時間）", "チャンネル登録者", "インプレッション数", "インプレッションのクリック率 (%)"],
+        ["コンテンツ", "動画のタイトル", "動画公開時刻", "長さ", "平均視聴率 (%)", "平均視聴時間", "高評価数", "視聴回数", "総再生時間（単位: 時間）", "チャンネル登録者", "インプレッション数", "インプレッションのクリック率 (%)"],
         [
-            ["合計", "", "", "", "15299", "100.9885", "27", "800", "5.13"],
-            ["Tyb-hzda344", "ブラックホールは地球の近くにある？", "Jul 8, 2026", "56", "1,580", "7.6646", "1", "49", "4.08"],
+            ["合計", "", "", "", "105.64", "0:00:56", "319", "15299", "100.9885", "27", "800", "5.13"],
+            ["Tyb-hzda344", "ブラックホールは地球の近くにある？", "Jul 8, 2026", "56", "87.12", "0:00:46", "38", "1,580", "7.6646", "1", "49", "4.08"],
         ],
     )
     _write_csv(graph, ["日付", "コンテンツ", "動画のタイトル", "動画公開時刻", "長さ", "視聴回数"], [["2026-06-11", "Tyb-hzda344", "ブラックホールは地球の近くにある？", "Jul 8, 2026", "56", "0"]])
@@ -69,7 +69,12 @@ def test_youtube_studio_japanese_columns_keep_title_and_id_separate(tmp_path) ->
     assert dataset.records[0].video_id == "Tyb-hzda344"
     assert dataset.records[0].title == "ブラックホールは地球の近くにある？"
     assert dataset.records[0].posted_date == "2026-07-08"
+    assert dataset.records[0].likes == 38
     assert dataset.records[0].views == 1580
+    assert dataset.records[0].average_percentage_viewed == 87.12
+    assert dataset.records[0].average_view_duration == 46
+    assert dataset.records[0].ctr == 4.08
+    assert dataset.records[0].subscriber_change == 1
     assert len(dataset.daily_rows) == 1
     assert dataset.totals["views"] == 3
 
