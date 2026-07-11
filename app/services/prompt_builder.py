@@ -38,7 +38,7 @@ def build_bulk_image_prompt(
             conditions.append(template_condition)
 
     lines = [
-        f"画像を{count}枚まとめて生成してください。",
+        f"画像を{count}枚、１枚ずつ生成してください。",
         "",
         "【共通条件】",
         "",

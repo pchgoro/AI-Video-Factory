@@ -7,7 +7,7 @@ from services.prompt_builder import build_bulk_image_prompt, build_chatgpt_promp
 def test_bulk_image_prompt_uses_requested_image_count() -> None:
     prompt = build_bulk_image_prompt(["p1", "p2", "p3"], 3, "・9:16\n・4K")
 
-    assert "画像を3枚まとめて生成してください。" in prompt
+    assert "画像を3枚、１枚ずつ生成してください。" in prompt
     assert "画像1" in prompt
     assert "画像3" in prompt
     assert "画像4" not in prompt
