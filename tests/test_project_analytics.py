@@ -44,6 +44,34 @@ def test_youtube_table_graph_and_total_csv_import(tmp_path) -> None:
     assert dataset.records[0].average_percentage_viewed == 58
     assert len(dataset.daily_rows) == 2
     assert dataset.totals["views"] == 1200
+    report = AnalyticsService().import_paths([table, graph, total], [])
+    assert report.summary.total_views == 1200
+
+
+def test_youtube_studio_japanese_columns_keep_title_and_id_separate(tmp_path) -> None:
+    table = tmp_path / "表データ.csv"
+    graph = tmp_path / "グラフデータ.csv"
+    total = tmp_path / "合計.csv"
+    _write_csv(
+        table,
+        ["コンテンツ", "動画のタイトル", "動画公開時刻", "長さ", "視聴回数", "総再生時間（単位: 時間）", "チャンネル登録者", "インプレッション数", "インプレッションのクリック率 (%)"],
+        [
+            ["合計", "", "", "", "15299", "100.9885", "27", "800", "5.13"],
+            ["Tyb-hzda344", "ブラックホールは地球の近くにある？", "Jul 8, 2026", "56", "1,580", "7.6646", "1", "49", "4.08"],
+        ],
+    )
+    _write_csv(graph, ["日付", "コンテンツ", "動画のタイトル", "動画公開時刻", "長さ", "視聴回数"], [["2026-06-11", "Tyb-hzda344", "ブラックホールは地球の近くにある？", "Jul 8, 2026", "56", "0"]])
+    _write_csv(total, ["日付", "視聴回数"], [["2026-06-11", "1"], ["2026-06-12", "2"]])
+
+    dataset = AnalyticsImportService().import_paths([table, graph, total])
+
+    assert len(dataset.records) == 1
+    assert dataset.records[0].video_id == "Tyb-hzda344"
+    assert dataset.records[0].title == "ブラックホールは地球の近くにある？"
+    assert dataset.records[0].posted_date == "2026-07-08"
+    assert dataset.records[0].views == 1580
+    assert len(dataset.daily_rows) == 1
+    assert dataset.totals["views"] == 3
 
 
 def test_cp932_csv_import_and_missing_columns_do_not_crash(tmp_path) -> None:

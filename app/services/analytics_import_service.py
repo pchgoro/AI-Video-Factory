@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from services.analytics_service import AnalyticsError, AnalyticsRecord
@@ -20,15 +21,15 @@ class AnalyticsImportService:
     """YouTube / TikTok Studio CSVを列名から判定して読み込みます。"""
 
     HEADER_ALIASES = {
-        "title": {"title", "video title", "content", "post", "動画", "タイトル", "動画タイトル", "投稿タイトル", "コンテンツ"},
-        "video_id": {"video id", "動画 id", "動画id", "コンテンツ id", "コンテンツid", "id"},
+        "title": {"title", "video title", "post", "動画", "タイトル", "動画タイトル", "動画のタイトル", "投稿タイトル"},
+        "video_id": {"video id", "content", "動画 id", "動画id", "コンテンツ", "コンテンツ id", "コンテンツid", "id"},
         "url": {"url", "video url", "動画 url", "動画リンク", "リンク"},
         "views": {"views", "video views", "view count", "plays", "再生回数", "視聴回数"},
         "likes": {"likes", "like count", "高評価", "いいね", "いいね数"},
         "comments": {"comments", "comment count", "コメント", "コメント数"},
         "shares": {"shares", "share count", "シェア", "シェア数"},
         "saves": {"saves", "saved", "保存", "保存数"},
-        "published_at": {"date", "publish date", "published", "posted date", "投稿日", "公開日", "投稿日時", "日付"},
+        "published_at": {"date", "publish date", "published", "posted date", "投稿日", "公開日", "投稿日時", "動画公開時刻", "日付"},
         "genre": {"genre", "category", "ジャンル", "カテゴリ"},
         "watch_time_hours": {"watch time (hours)", "watch time hours", "総再生時間", "総再生時間（時間）", "再生時間（時間）"},
         "average_view_duration": {"average view duration", "平均視聴時間", "平均再生時間"},
@@ -87,13 +88,19 @@ class AnalyticsImportService:
         raise AnalyticsError(f"CSVの文字コードを判定できませんでした: {last_error}")
 
     def detect_csv_type(self, path: Path, headers, field_map: dict[str, str]) -> str:
-        normalized_headers = {self._normalize_header(header) for header in headers}
         name = path.name.lower()
+        normalized_headers = {self._normalize_header(header) for header in headers}
+        if "グラフ" in path.name or "graph" in name:
+            return "graph"
+        if "合計" in path.name or "total" in name:
+            return "total"
+        if {"日付", "コンテンツ", "動画のタイトル"}.issubset({str(header) for header in headers}):
+            return "graph"
         if "title" in field_map and "views" in field_map:
             return "table"
         if "published_at" in field_map and "views" in field_map and "title" not in field_map:
             return "graph"
-        if "合計" in name or "total" in name or ("views" in field_map and len(normalized_headers) <= 6):
+        if "views" in field_map and len(normalized_headers) <= 6:
             return "total"
         return "table"
 
@@ -124,7 +131,7 @@ class AnalyticsImportService:
                 views=self.parse_int(row.get(field_map["views"], "")),
                 likes=self.parse_int(row.get(field_map.get("likes", ""), "")),
                 comments=self.parse_int(row.get(field_map.get("comments", ""), "")),
-                posted_date=self._clean(row.get(field_map.get("published_at", ""), "")),
+                posted_date=self.normalize_date(row.get(field_map.get("published_at", ""), "")),
                 genre=self._clean(row.get(field_map.get("genre", ""), "")) or "未分類",
                 platform=platform,
                 video_id=self._clean(row.get(field_map.get("video_id", ""), "")),
@@ -149,7 +156,7 @@ class AnalyticsImportService:
         for row in rows:
             result.append(
                 {
-                    "date": self._clean(row.get(field_map.get("published_at", ""), "")),
+                    "date": self.normalize_date(row.get(field_map.get("published_at", ""), "")),
                     "views": self.parse_int(row.get(field_map.get("views", ""), "")),
                     "likes": self.parse_int(row.get(field_map.get("likes", ""), "")),
                     "comments": self.parse_int(row.get(field_map.get("comments", ""), "")),
@@ -160,7 +167,14 @@ class AnalyticsImportService:
     def _total_values(self, rows: list[dict[str, str]], field_map: dict[str, str]) -> dict[str, object]:
         if not rows:
             return {}
-        row = rows[-1]
+        if len(rows) > 1:
+            return {
+                "views": sum(self.parse_int(row.get(field_map.get("views", ""), "")) for row in rows),
+                "likes": sum(self.parse_int(row.get(field_map.get("likes", ""), "")) for row in rows),
+                "comments": sum(self.parse_int(row.get(field_map.get("comments", ""), "")) for row in rows),
+                "watch_time_hours": sum(self.parse_float(row.get(field_map.get("watch_time_hours", ""), "")) for row in rows),
+            }
+        row = rows[0]
         return {
             "views": self.parse_int(row.get(field_map.get("views", ""), "")),
             "likes": self.parse_int(row.get(field_map.get("likes", ""), "")),
@@ -199,6 +213,17 @@ class AnalyticsImportService:
         if len(parts) == 2:
             return self.parse_int(parts[0]) * 60 + self.parse_float(parts[1])
         return self.parse_float(text)
+
+    def normalize_date(self, value: object) -> str:
+        text = self._clean(value)
+        if not text:
+            return ""
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%b %d, %Y", "%B %d, %Y", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
+            try:
+                return datetime.strptime(text[:19], fmt).strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+        return text
 
     def _clean(self, value: object) -> str:
         return str(value or "").strip()

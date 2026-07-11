@@ -133,6 +133,7 @@ class AnalyticsService:
         report = self.build_report(dataset.records)
         report.graph_rows = dataset.daily_rows
         report.totals = dataset.totals
+        self._apply_total_overrides(report)
         return report
 
     def build_report(self, records: list[AnalyticsRecord]) -> AnalyticsReport:
@@ -300,6 +301,21 @@ class AnalyticsService:
             average_like_rate=sum(item.like_rate for item in records) / len(records),
             average_comment_rate=sum(item.comment_rate for item in records) / len(records),
         )
+
+    def _apply_total_overrides(self, report: AnalyticsReport) -> None:
+        if not report.totals:
+            return
+        total_views = int(report.totals.get("views") or 0)
+        total_likes = int(report.totals.get("likes") or 0)
+        total_comments = int(report.totals.get("comments") or 0)
+        if total_views > report.summary.total_views:
+            report.summary.total_views = total_views
+            if report.summary.total_videos:
+                report.summary.average_views = total_views / report.summary.total_videos
+        if total_likes > report.summary.total_likes:
+            report.summary.total_likes = total_likes
+        if total_comments > report.summary.total_comments:
+            report.summary.total_comments = total_comments
 
     def _rating(self, record: AnalyticsRecord, summary: AnalyticsSummary) -> int:
         if summary.total_videos == 0:
