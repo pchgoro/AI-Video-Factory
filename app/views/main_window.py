@@ -265,17 +265,17 @@ class MainWindow(QMainWindow):
 
         self.project_count_label = QLabel("表示中: 0件 / 全0件")
         filter_layout.addWidget(self.project_count_label)
-        filter_panel.setMinimumHeight(250)
+        filter_panel.setMinimumHeight(350)
         filter_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         filter_scroll = self._splitter_scroll_area(filter_panel)
-        filter_scroll.setMinimumHeight(64)
+        filter_scroll.setMinimumHeight(320)
         filter_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         filter_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         self.project_list = QListWidget()
         self.project_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.project_list.itemSelectionChanged.connect(self.load_selected_project)
-        self.project_list.setMinimumHeight(220)
+        self.project_list.setMinimumHeight(140)
         self.project_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         project_list_widget = self.project_list
 
@@ -381,7 +381,7 @@ class MainWindow(QMainWindow):
         self.left_content_splitter.addWidget(filter_scroll)
         self.left_content_splitter.addWidget(project_list_widget)
         self.left_content_splitter.addWidget(topic_scroll)
-        self.left_content_splitter.setSizes([145, 390, 300])
+        self.left_content_splitter.setSizes([390, 260, 240])
         layout.addWidget(self.left_content_splitter, stretch=1)
         return panel
 
