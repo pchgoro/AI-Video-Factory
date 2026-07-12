@@ -275,7 +275,7 @@ class MainWindow(QMainWindow):
         self.project_list = QListWidget()
         self.project_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.project_list.itemSelectionChanged.connect(self.load_selected_project)
-        self.project_list.setMinimumHeight(80)
+        self.project_list.setMinimumHeight(220)
         self.project_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         project_list_widget = self.project_list
 
@@ -381,7 +381,7 @@ class MainWindow(QMainWindow):
         self.left_content_splitter.addWidget(filter_scroll)
         self.left_content_splitter.addWidget(project_list_widget)
         self.left_content_splitter.addWidget(topic_scroll)
-        self.left_content_splitter.setSizes([170, 260, 420])
+        self.left_content_splitter.setSizes([145, 390, 300])
         layout.addWidget(self.left_content_splitter, stretch=1)
         return panel
 
