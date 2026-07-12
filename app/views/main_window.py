@@ -268,7 +268,7 @@ class MainWindow(QMainWindow):
         filter_panel.setMinimumHeight(350)
         filter_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         filter_scroll = self._splitter_scroll_area(filter_panel)
-        filter_scroll.setMinimumHeight(320)
+        filter_scroll.setMinimumHeight(80)
         filter_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         filter_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
@@ -381,7 +381,7 @@ class MainWindow(QMainWindow):
         self.left_content_splitter.addWidget(filter_scroll)
         self.left_content_splitter.addWidget(project_list_widget)
         self.left_content_splitter.addWidget(topic_scroll)
-        self.left_content_splitter.setSizes([390, 260, 240])
+        self.left_content_splitter.setSizes([300, 320, 270])
         layout.addWidget(self.left_content_splitter, stretch=1)
         return panel
 
