@@ -77,6 +77,7 @@ class ProjectInfo:
     topic: str = ""
     title: str = ""
     genre: str = ""
+    category: str = ""
     duration: str = ""
     image_count: int = 5
     template_name: str = ""
@@ -89,6 +90,9 @@ class ProjectInfo:
     created_at: str = ""
     updated_at: str = ""
     progress: dict[str, bool] = field(default_factory=dict)
+    analytics_views: int = 0
+    analytics_rating: int = 0
+    csv_posted: bool = False
 
 
 @dataclass

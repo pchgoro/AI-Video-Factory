@@ -104,6 +104,10 @@ class AiAdvisorService:
         if not analytics.records:
             return ["CSVを読み込むと、成績に基づいた制作提案が表示されます。"]
         comments = list(analytics.comments)
+        if analytics.category_metrics:
+            top_category = analytics.category_metrics[0]
+            if top_category.name != "未分類":
+                comments.append(f"{top_category.name}カテゴリが好調です。次も同じカテゴリの別角度を試す価値があります。")
         recent = self._recent_records(analytics.records, 5)
         if len(recent) >= 2:
             first_half = recent[: max(1, len(recent) // 2)]
@@ -123,8 +127,12 @@ class AiAdvisorService:
 
     def recommended_themes(self, analytics: AnalyticsReport, topics: list[str]) -> list[TopicSuggestion]:
         suggestions: list[TopicSuggestion] = []
+        for metric in analytics.category_metrics[:2]:
+            if metric.name != "未分類":
+                suggestions.append(TopicSuggestion(metric.name, self._stars_from_group(metric, analytics), f"カテゴリ平均{metric.average_views:,.0f}回"))
         for metric in analytics.word_metrics[:5]:
-            suggestions.append(TopicSuggestion(metric.word, self._stars_from_word(metric, analytics), f"{metric.count}件 / 平均{metric.average_views:,.0f}回"))
+            if metric.word not in {item.name for item in suggestions}:
+                suggestions.append(TopicSuggestion(metric.word, self._stars_from_word(metric, analytics), f"{metric.count}件 / 平均{metric.average_views:,.0f}回"))
         if len(suggestions) < 5:
             existing = {item.name for item in suggestions}
             candidates = topics or self.FALLBACK_TOPICS
@@ -219,6 +227,8 @@ class AiAdvisorService:
         return 2
 
     def _best_theme(self, analytics: AnalyticsReport, topics: list[str]) -> str:
+        if analytics.category_metrics and analytics.category_metrics[0].name != "未分類":
+            return analytics.category_metrics[0].name
         if analytics.word_metrics:
             return analytics.word_metrics[0].word
         if analytics.genre_metrics:
@@ -226,6 +236,18 @@ class AiAdvisorService:
         if topics:
             return topics[0]
         return self.FALLBACK_TOPICS[0]
+
+    def _stars_from_group(self, metric: GroupMetric, analytics: AnalyticsReport) -> int:
+        if analytics.summary.average_views <= 0:
+            return 3
+        ratio = metric.average_views / analytics.summary.average_views
+        if ratio >= 1.5:
+            return 5
+        if ratio >= 1.1:
+            return 4
+        if ratio >= 0.8:
+            return 3
+        return 2
 
     def _recent_records(self, records: list[AnalyticsRecord], count: int) -> list[AnalyticsRecord]:
         return sorted(records, key=lambda record: self._date_key(record.posted_date))[-count:]

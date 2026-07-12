@@ -44,6 +44,7 @@ class ProjectAnalyticsService:
             for record in items:
                 platform_key = "youtube" if record.platform == "YouTube" else "tiktok" if record.platform == "TikTok" else "csv"
                 analytics[platform_key] = self.record_to_project_json(record)
+            metadata["analytics_rating"] = max(int(record.rating or 0) for record in items)
             metadata["posting_status"] = {
                 "manual_posted": (project.path / "posted.txt").exists(),
                 "csv_confirmed": True,

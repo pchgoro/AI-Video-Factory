@@ -9,6 +9,7 @@ from pathlib import Path
 from PySide6.QtCore import QSize, Qt, QTimer, QStringListModel, QUrl
 from PySide6.QtGui import QGuiApplication, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QCompleter,
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -52,10 +54,12 @@ from services.dashboard_service import DashboardService
 from services.ai_advisor_service import AdvisorReport, AiAdvisorService
 from services.analytics_link_service import AnalyticsLinkService, AnalyticsLinkSummary
 from services.analytics_service import AnalyticsError, AnalyticsReport, AnalyticsService
+from services.category_service import CategoryService
 from services.image_import_service import ImageImportError, ImageImportService
 from services.parser import ChatGptAnswerParser, ChatGptParseError
 from services.compilation_service import BrandingSegmentOptions, CompilationService
 from services.project_service import ProjectService
+from services.project_filter_service import ProjectBulkUpdate, ProjectFilterCriteria, ProjectFilterService, UNCATEGORIZED
 from services.project_analytics_service import ProjectAnalyticsReport, ProjectAnalyticsService
 from services.prompt_builder import build_bulk_image_prompt, build_chatgpt_prompt
 from services.settings_service import SettingsService
@@ -145,6 +149,8 @@ class MainWindow(QMainWindow):
         self.parser = ChatGptAnswerParser()
         self.image_import_service = ImageImportService()
         self.tag_service = TagService()
+        self.category_service = CategoryService(paths)
+        self.project_filter_service = ProjectFilterService()
         self.analytics_service = AnalyticsService()
         self.analytics_link_service = AnalyticsLinkService(self.paths.base_dir)
         self.project_analytics_service = ProjectAnalyticsService()
@@ -158,6 +164,7 @@ class MainWindow(QMainWindow):
         self.projects: list[ProjectInfo] = []
         self.topics: list[str] = []
         self.templates: list[PromptTemplate] = []
+        self.categories_by_genre: dict[str, list[str]] = {}
 
         self.media_player = None
         self.audio_output = None
@@ -208,10 +215,49 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.project_search)
 
         self.genre_filter = QComboBox()
-        self.genre_filter.currentTextChanged.connect(self.refresh_project_list)
+        self.genre_filter.currentTextChanged.connect(self.on_project_filter_genre_changed)
         layout.addWidget(self.genre_filter)
 
+        self.category_filter = QComboBox()
+        self.category_filter.currentTextChanged.connect(self.on_project_filter_category_changed)
+        layout.addWidget(self.category_filter)
+
+        self.series_filter = QComboBox()
+        self.series_filter.currentTextChanged.connect(self.refresh_project_list)
+        layout.addWidget(self.series_filter)
+
+        filter_grid = QGridLayout()
+        self.tag_filter = QLineEdit()
+        self.tag_filter.setPlaceholderText("タグ")
+        self.tag_filter.textChanged.connect(self.refresh_project_list)
+        self.posted_filter = QComboBox()
+        self.posted_filter.addItems(["すべての状態", "投稿済み", "手動で投稿済み", "CSVから投稿確認済み", "未投稿"])
+        self.posted_filter.currentTextChanged.connect(self.refresh_project_list)
+        self.progress_filter = QComboBox()
+        self.progress_filter.addItems(["すべての状態", "制作中", "動画完成", "台本", "画像", "音声", "字幕"])
+        self.progress_filter.currentTextChanged.connect(self.refresh_project_list)
+        self.project_rating_filter = QComboBox()
+        self.project_rating_filter.addItems(["評価すべて", "★以上", "★★以上", "★★★以上", "★★★★以上", "★★★★★"])
+        self.project_rating_filter.currentTextChanged.connect(self.refresh_project_list)
+        self.project_min_views_filter = QSpinBox()
+        self.project_min_views_filter.setRange(0, 2_000_000_000)
+        self.project_min_views_filter.setSingleStep(100)
+        self.project_min_views_filter.valueChanged.connect(self.refresh_project_list)
+        reset_filter_button = QPushButton("絞り込み解除")
+        reset_filter_button.clicked.connect(self.reset_project_filters)
+        filter_grid.addWidget(self.tag_filter, 0, 0, 1, 2)
+        filter_grid.addWidget(self.posted_filter, 1, 0)
+        filter_grid.addWidget(self.progress_filter, 1, 1)
+        filter_grid.addWidget(self.project_rating_filter, 2, 0)
+        filter_grid.addWidget(self.project_min_views_filter, 2, 1)
+        filter_grid.addWidget(reset_filter_button, 3, 0, 1, 2)
+        layout.addLayout(filter_grid)
+
+        self.project_count_label = QLabel("表示中: 0件 / 全0件")
+        layout.addWidget(self.project_count_label)
+
         self.project_list = QListWidget()
+        self.project_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.project_list.itemSelectionChanged.connect(self.load_selected_project)
         self.project_list.setMinimumHeight(80)
         self.project_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
@@ -251,9 +297,39 @@ class MainWindow(QMainWindow):
         self.bulk_topics.setPlaceholderText("複数テーマを1行ずつ入力")
         self.bulk_topics.setFixedHeight(100)
         topic_controls_layout.addWidget(self.bulk_topics)
+        topic_controls_layout.addWidget(QLabel("一括作成カテゴリ"))
+        self.bulk_category_box = QComboBox()
+        self.bulk_category_box.setEditable(True)
+        topic_controls_layout.addWidget(self.bulk_category_box)
+        topic_controls_layout.addWidget(QLabel("一括作成シリーズ"))
+        self.bulk_series_input = QLineEdit()
+        self.bulk_series_input.setPlaceholderText("未入力なら各テーマ名をシリーズにします")
+        topic_controls_layout.addWidget(self.bulk_series_input)
         start_bulk_button = QPushButton("制作開始")
         start_bulk_button.clicked.connect(self.start_bulk_projects)
         topic_controls_layout.addWidget(start_bulk_button)
+
+        category_box = QGroupBox("カテゴリ管理")
+        category_layout = QVBoxLayout(category_box)
+        self.category_manage_genre_box = QComboBox()
+        self.category_manage_genre_box.currentTextChanged.connect(self.refresh_category_manage_list)
+        category_layout.addWidget(self.category_manage_genre_box)
+        self.category_manage_list = QListWidget()
+        category_layout.addWidget(self.category_manage_list)
+        category_buttons = QGridLayout()
+        for index, (text, handler) in enumerate([
+            ("追加", self.add_category),
+            ("編集", self.edit_category),
+            ("削除", self.delete_category),
+            ("上へ", lambda: self.move_category(-1)),
+            ("下へ", lambda: self.move_category(1)),
+            ("選択プロジェクトへ一括反映", self.bulk_update_selected_projects),
+        ]):
+            button = QPushButton(text)
+            button.clicked.connect(handler)
+            category_buttons.addWidget(button, index // 2, index % 2)
+        category_layout.addLayout(category_buttons)
+        topic_controls_layout.addWidget(category_box)
 
         memo_box = QGroupBox("メモ")
         memo_layout = QVBoxLayout(memo_box)
@@ -462,6 +538,11 @@ class MainWindow(QMainWindow):
         self.duration_box = QComboBox()
         self.duration_box.addItems(DEFAULT_DURATIONS)
         self.genre_box = QComboBox()
+        self.genre_box.currentTextChanged.connect(self.refresh_form_categories)
+        self.category_box = QComboBox()
+        self.category_box.setEditable(True)
+        self.series_input = QLineEdit()
+        self.series_input.setPlaceholderText("例: ブラックホール基礎")
         self.image_count_box = QComboBox()
         self.image_count_box.addItems(["3", "4", "5", "6", "8"])
         self.youtube_tags_input = QLineEdit()
@@ -482,8 +563,12 @@ class MainWindow(QMainWindow):
         form.addWidget(self.image_count_box, 1, 5)
         form.addWidget(QLabel("ジャンル"), 2, 0)
         form.addWidget(self.genre_box, 2, 1)
-        form.addWidget(QLabel("YouTubeタグ"), 2, 2)
-        form.addWidget(self.youtube_tags_input, 2, 3, 1, 2)
+        form.addWidget(QLabel("カテゴリ"), 2, 2)
+        form.addWidget(self.category_box, 2, 3)
+        form.addWidget(QLabel("シリーズ"), 2, 4)
+        form.addWidget(self.series_input, 2, 5)
+        form.addWidget(QLabel("YouTubeタグ"), 3, 0)
+        form.addWidget(self.youtube_tags_input, 3, 1, 1, 3)
         youtube_buttons = QHBoxLayout()
         save_youtube_tags_button = QPushButton("youtubeタグ保存")
         save_youtube_tags_button.clicked.connect(self.save_youtube_tags)
@@ -491,9 +576,9 @@ class MainWindow(QMainWindow):
         copy_youtube_tags_button.clicked.connect(self.copy_youtube_tags_to_clipboard)
         youtube_buttons.addWidget(save_youtube_tags_button)
         youtube_buttons.addWidget(copy_youtube_tags_button)
-        form.addLayout(youtube_buttons, 2, 5)
-        form.addWidget(QLabel("TikTokタグ"), 3, 2)
-        form.addWidget(self.tiktok_tags_input, 3, 3, 1, 2)
+        form.addLayout(youtube_buttons, 3, 4, 1, 2)
+        form.addWidget(QLabel("TikTokタグ"), 4, 0)
+        form.addWidget(self.tiktok_tags_input, 4, 1, 1, 3)
         tiktok_buttons = QHBoxLayout()
         save_tiktok_tags_button = QPushButton("tiktokタグ保存")
         save_tiktok_tags_button.clicked.connect(self.save_tiktok_tags)
@@ -501,7 +586,7 @@ class MainWindow(QMainWindow):
         copy_tiktok_tags_button.clicked.connect(self.copy_tiktok_tags_to_clipboard)
         tiktok_buttons.addWidget(save_tiktok_tags_button)
         tiktok_buttons.addWidget(copy_tiktok_tags_button)
-        form.addLayout(tiktok_buttons, 3, 5)
+        form.addLayout(tiktok_buttons, 4, 4, 1, 2)
         return box
 
     def _build_preview_tab(self) -> QWidget:
@@ -933,6 +1018,7 @@ class MainWindow(QMainWindow):
     def _load_initial_data(self) -> None:
         self.templates = self.template_service.load()
         self.topics = self.topic_service.load()
+        self.categories_by_genre = self.category_service.load()
         self.apply_settings_to_ui()
         self.reload_projects()
         self.refresh_topic_list()
@@ -944,11 +1030,18 @@ class MainWindow(QMainWindow):
         self._set_image_count(self.settings.default_image_count)
         self.genre_box.clear()
         self.genre_box.addItems(self.settings.genres)
+        self.category_manage_genre_box.blockSignals(True)
+        self.category_manage_genre_box.clear()
+        self.category_manage_genre_box.addItems(self.settings.genres)
+        self.category_manage_genre_box.blockSignals(False)
         self.genre_filter.blockSignals(True)
         self.genre_filter.clear()
         self.genre_filter.addItem("すべてのジャンル")
         self.genre_filter.addItems(self.settings.genres)
         self.genre_filter.blockSignals(False)
+        self.refresh_form_categories()
+        self.refresh_project_category_filter()
+        self.refresh_category_manage_list()
         self.template_box.blockSignals(True)
         self.template_box.clear()
         self.template_box.addItems([template.name for template in self.templates])
@@ -957,6 +1050,8 @@ class MainWindow(QMainWindow):
 
     def reload_projects(self) -> None:
         self.projects = self.project_service.list_projects()
+        self.refresh_project_category_filter()
+        self.refresh_project_series_filter()
         self.refresh_project_list()
         self.refresh_dashboard()
         self.refresh_completer()
@@ -1194,6 +1289,16 @@ class MainWindow(QMainWindow):
             lines.append(
                 f"{metric.name}: 動画数 {metric.count} / 平均再生数 {metric.average_views:,.0f} / 平均いいね {metric.average_likes:,.0f}"
             )
+        lines.append("")
+        lines.append("【カテゴリ別】")
+        if not report.category_metrics:
+            lines.append("カテゴリ分析データがありません。")
+        for metric in report.category_metrics:
+            stars = "★" * round(metric.average_rating or 1) + "☆" * (5 - round(metric.average_rating or 1))
+            lines.append(
+                f"{metric.name}: 動画数 {metric.count} / 総再生数 {metric.total_views:,} / 平均再生数 {metric.average_views:,.0f} "
+                f"/ 平均いいね率 {metric.average_like_rate:.2f}% / 平均視聴率 {metric.average_view_percentage:.1f}% / 評価 {stars}"
+            )
         return "\n".join(lines)
 
     def _analytics_title_text(self, report: AnalyticsReport) -> str:
@@ -1215,7 +1320,7 @@ class MainWindow(QMainWindow):
         project = f" / project: {record.project_name}" if record.project_name else " / project: 未紐付け"
         return (
             f"{stars}  {record.title}\n"
-            f"  ジャンル: {record.genre} / 再生数: {record.views:,} / いいね: {record.likes:,} "
+            f"  ジャンル: {record.genre} / カテゴリ: {record.category or '未分類'} / 再生数: {record.views:,} / いいね: {record.likes:,} "
             f"/ コメント: {record.comments:,} / いいね率: {record.like_rate:.2f}% / コメント率: {record.comment_rate:.2f}% "
             f"/ 投稿日: {record.posted_date or '-'}{project}"
         )
@@ -1377,24 +1482,90 @@ class MainWindow(QMainWindow):
         return lines
 
     def refresh_project_list(self) -> None:
-        keyword = self.project_search.text().strip().lower()
-        genre = self.genre_filter.currentText()
+        criteria = self._project_filter_criteria()
+        filtered_projects = self.project_filter_service.filter(self.projects, criteria)
         current_path = str(self.current_project.path) if self.current_project else ""
         self.project_list.blockSignals(True)
         self.project_list.clear()
-        for project in self.projects:
-            fields = [project.title, project.topic, project.genre, project.posted_date, project.series, " ".join(project.tags), project.name]
-            haystack = " ".join(fields).lower()
-            if keyword and keyword not in haystack:
-                continue
-            if genre and genre != "すべてのジャンル" and project.genre != genre:
-                continue
+        for project in filtered_projects:
             item = QListWidgetItem(self._project_display_name(project))
             item.setData(Qt.UserRole, str(project.path))
+            item.setToolTip(self._project_tooltip(project))
             self.project_list.addItem(item)
             if current_path and str(project.path) == current_path:
                 item.setSelected(True)
         self.project_list.blockSignals(False)
+        self.project_count_label.setText(f"表示中: {len(filtered_projects)}件 / 全{len(self.projects)}件")
+
+    def _project_filter_criteria(self) -> ProjectFilterCriteria:
+        return ProjectFilterCriteria(
+            keyword=self.project_search.text(),
+            genre=self.genre_filter.currentText(),
+            category=self.category_filter.currentData() or self.category_filter.currentText(),
+            series=self.series_filter.currentText(),
+            tag=self.tag_filter.text(),
+            posted_status=self.posted_filter.currentText(),
+            progress_status=self.progress_filter.currentText(),
+            min_rating=self.project_rating_filter.currentIndex(),
+            min_views=self.project_min_views_filter.value(),
+        )
+
+    def reset_project_filters(self) -> None:
+        self.project_search.clear()
+        self.tag_filter.clear()
+        self.project_min_views_filter.setValue(0)
+        self.project_rating_filter.setCurrentIndex(0)
+        self.posted_filter.setCurrentIndex(0)
+        self.progress_filter.setCurrentIndex(0)
+        self.genre_filter.setCurrentIndex(0)
+        self.refresh_project_category_filter()
+        self.refresh_project_series_filter()
+        self.refresh_project_list()
+
+    def on_project_filter_genre_changed(self) -> None:
+        self.refresh_project_category_filter()
+        self.refresh_project_series_filter()
+        self.refresh_project_list()
+
+    def on_project_filter_category_changed(self) -> None:
+        self.refresh_project_series_filter()
+        self.refresh_project_list()
+
+    def refresh_project_category_filter(self) -> None:
+        if not hasattr(self, "category_filter"):
+            return
+        current = self.category_filter.currentData() or self.category_filter.currentText()
+        genre = self.genre_filter.currentText() if hasattr(self, "genre_filter") else ""
+        counts = self.project_filter_service.category_counts(self.projects, "" if genre == "すべてのジャンル" else genre)
+        categories = sorted(counts)
+        self.category_filter.blockSignals(True)
+        self.category_filter.clear()
+        self.category_filter.addItem("すべてのカテゴリ", "")
+        if genre and genre != "すべてのジャンル":
+            for category in self.categories_by_genre.get(genre, []):
+                label = f"{category}（{counts.get(category, 0)}）"
+                self.category_filter.addItem(label, category)
+        else:
+            for category in categories:
+                self.category_filter.addItem(f"{category}（{counts.get(category, 0)}）", category)
+        if self.category_filter.findData(current) >= 0:
+            self.category_filter.setCurrentIndex(self.category_filter.findData(current))
+        self.category_filter.blockSignals(False)
+
+    def refresh_project_series_filter(self) -> None:
+        if not hasattr(self, "series_filter"):
+            return
+        current = self.series_filter.currentText()
+        genre = self.genre_filter.currentText()
+        category = self.category_filter.currentData() or self.category_filter.currentText()
+        values = self.project_filter_service.series_values(self.projects, genre, category)
+        self.series_filter.blockSignals(True)
+        self.series_filter.clear()
+        self.series_filter.addItem("すべてのシリーズ")
+        self.series_filter.addItems(values)
+        if current in values:
+            self.series_filter.setCurrentText(current)
+        self.series_filter.blockSignals(False)
 
     def refresh_compilation_genres(self) -> None:
         if not hasattr(self, "compilation_genre_box"):
@@ -1461,6 +1632,9 @@ class MainWindow(QMainWindow):
         self.topic_input.setText(self.current_project.topic)
         self.duration_box.setCurrentText(self.current_project.duration or self.settings.default_duration)
         self.genre_box.setCurrentText(self.current_project.genre)
+        self.refresh_form_categories()
+        self.category_box.setCurrentText(self.current_project.category)
+        self.series_input.setText(self.current_project.series)
         self._set_image_count(self.current_project.image_count)
         self.template_box.setCurrentText(self.current_project.template_name)
         self._load_project_texts(self.current_project.path)
@@ -1490,6 +1664,98 @@ class MainWindow(QMainWindow):
             if self.genre_box.findText(template.genre) < 0:
                 self.genre_box.addItem(template.genre)
             self.genre_box.setCurrentText(template.genre)
+            self.refresh_form_categories()
+
+    def refresh_form_categories(self) -> None:
+        if not hasattr(self, "category_box"):
+            return
+        current = self.category_box.currentText()
+        genre = self.genre_box.currentText()
+        categories = self.categories_by_genre.get(genre, [])
+        self.category_box.blockSignals(True)
+        self.category_box.clear()
+        self.category_box.addItem("")
+        self.category_box.addItems(categories)
+        if current and self.category_box.findText(current) < 0:
+            self.category_box.addItem(current)
+        if current:
+            self.category_box.setCurrentText(current)
+        self.category_box.blockSignals(False)
+        if hasattr(self, "bulk_category_box"):
+            bulk_current = self.bulk_category_box.currentText()
+            self.bulk_category_box.clear()
+            self.bulk_category_box.addItem("")
+            self.bulk_category_box.addItems(categories)
+            if bulk_current and self.bulk_category_box.findText(bulk_current) < 0:
+                self.bulk_category_box.addItem(bulk_current)
+            if bulk_current:
+                self.bulk_category_box.setCurrentText(bulk_current)
+
+    def refresh_category_manage_list(self) -> None:
+        if not hasattr(self, "category_manage_list"):
+            return
+        genre = self.category_manage_genre_box.currentText()
+        self.category_manage_list.clear()
+        for category in self.categories_by_genre.get(genre, []):
+            self.category_manage_list.addItem(category)
+
+    def add_category(self) -> None:
+        genre = self.category_manage_genre_box.currentText() or self.genre_box.currentText()
+        category, ok = QInputDialog.getText(self, "カテゴリ追加", f"{genre} に追加するカテゴリ")
+        if not ok or not category.strip():
+            return
+        self.categories_by_genre = self.category_service.add_category(genre, category, self.categories_by_genre)
+        self.category_service.save(self.categories_by_genre)
+        self.refresh_category_ui()
+
+    def edit_category(self) -> None:
+        selected = self.category_manage_list.currentItem()
+        if selected is None:
+            QMessageBox.warning(self, "カテゴリ管理", "編集するカテゴリを選択してください。")
+            return
+        genre = self.category_manage_genre_box.currentText()
+        old_category = selected.text()
+        new_category, ok = QInputDialog.getText(self, "カテゴリ編集", "新しいカテゴリ名", text=old_category)
+        if not ok or not new_category.strip():
+            return
+        self.categories_by_genre = self.category_service.rename_category(genre, old_category, new_category, self.categories_by_genre)
+        self.category_service.save(self.categories_by_genre)
+        self.refresh_category_ui()
+
+    def delete_category(self) -> None:
+        selected = self.category_manage_list.currentItem()
+        if selected is None:
+            QMessageBox.warning(self, "カテゴリ管理", "削除するカテゴリを選択してください。")
+            return
+        genre = self.category_manage_genre_box.currentText()
+        category = selected.text()
+        if self.category_service.is_category_used(self.projects, genre, category):
+            QMessageBox.warning(self, "カテゴリ管理", "このカテゴリを使用中のプロジェクトがあります。先にプロジェクト側のカテゴリを変更してください。")
+            return
+        if QMessageBox.question(self, "カテゴリ削除", f"{category} をカテゴリ一覧から削除しますか？") != QMessageBox.Yes:
+            return
+        self.categories_by_genre = self.category_service.delete_category(genre, category, self.categories_by_genre)
+        self.category_service.save(self.categories_by_genre)
+        self.refresh_category_ui()
+
+    def move_category(self, direction: int) -> None:
+        selected = self.category_manage_list.currentItem()
+        if selected is None:
+            return
+        genre = self.category_manage_genre_box.currentText()
+        category = selected.text()
+        self.categories_by_genre = self.category_service.move_category(genre, category, direction, self.categories_by_genre)
+        self.category_service.save(self.categories_by_genre)
+        self.refresh_category_ui()
+        matching = self.category_manage_list.findItems(category, Qt.MatchExactly)
+        if matching:
+            self.category_manage_list.setCurrentItem(matching[0])
+
+    def refresh_category_ui(self) -> None:
+        self.refresh_form_categories()
+        self.refresh_category_manage_list()
+        self.refresh_project_category_filter()
+        self.refresh_project_list()
 
     def current_template(self) -> PromptTemplate | None:
         name = self.template_box.currentText()
@@ -1499,7 +1765,7 @@ class MainWindow(QMainWindow):
         values = self._read_form_values()
         if values is None:
             return
-        topic, duration, genre, image_count, _tags = values
+        topic, duration, genre, _category, _series, image_count, _tags = values
         prompt = build_chatgpt_prompt(topic, duration, genre, image_count, self.current_template())
         self.prompt_text.setPlainText(prompt)
         self.content_tabs.setCurrentWidget(self.prompt_text)
@@ -1562,11 +1828,12 @@ class MainWindow(QMainWindow):
         values = self._read_form_values()
         if values is None:
             return
-        topic, duration, genre, image_count, tags = values
+        topic, duration, genre, category, series, image_count, tags = values
         prompt = self.prompt_text.toPlainText().strip() or build_chatgpt_prompt(topic, duration, genre, image_count, self.current_template())
         self.prompt_text.setPlainText(prompt)
+        self.ensure_category_registered(genre, category)
         try:
-            self.current_project = self.project_service.create_project(topic, genre, duration, image_count, prompt, self.template_box.currentText(), tags, topic)
+            self.current_project = self.project_service.create_project(topic, genre, duration, image_count, prompt, self.template_box.currentText(), tags, series or topic, category)
         except OSError as exc:
             QMessageBox.critical(self, "作成エラー", f"プロジェクトの作成に失敗しました。\n{exc}")
             return
@@ -1587,15 +1854,20 @@ class MainWindow(QMainWindow):
             return
         duration = self.duration_box.currentText()
         genre = self.genre_box.currentText()
+        category = self.bulk_category_box.currentText().strip() or self.category_box.currentText().strip()
+        series = self.bulk_series_input.text().strip()
         image_count = int(self.image_count_box.currentText())
         template = self.current_template()
         tags = self._parse_tags()
+        self.ensure_category_registered(genre, category)
 
         def make_prompt(topic: str) -> str:
             return build_chatgpt_prompt(topic, duration, genre, image_count, template)
 
         try:
-            created = self.project_service.create_projects_from_topics(topics, genre, duration, image_count, self.template_box.currentText(), make_prompt, tags)
+            created = self.project_service.create_projects_from_topics(topics, genre, category, duration, image_count, self.template_box.currentText(), make_prompt, tags if tags else [],)
+            if series:
+                created = [self.project_service.update_project_classification(project, series=series) for project in created]
         except OSError as exc:
             QMessageBox.critical(self, "一括作成エラー", f"プロジェクト作成に失敗しました。\n{exc}")
             return
@@ -2238,12 +2510,63 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "設定保存", "設定を保存しました。")
         self.apply_settings_to_ui()
 
-    def _read_form_values(self) -> tuple[str, str, str, int, list[str]] | None:
+    def _read_form_values(self) -> tuple[str, str, str, str, str, int, list[str]] | None:
         topic = self.topic_input.text().strip()
         if not topic:
             QMessageBox.warning(self, "入力エラー", "テーマを入力してください。")
             return None
-        return topic, self.duration_box.currentText(), self.genre_box.currentText(), int(self.image_count_box.currentText()), self._parse_tags()
+        return (
+            topic,
+            self.duration_box.currentText(),
+            self.genre_box.currentText(),
+            self.category_box.currentText().strip(),
+            self.series_input.text().strip(),
+            int(self.image_count_box.currentText()),
+            self._parse_tags(),
+        )
+
+    def ensure_category_registered(self, genre: str, category: str) -> None:
+        if not genre.strip() or not category.strip():
+            return
+        if category in self.categories_by_genre.get(genre, []):
+            return
+        if QMessageBox.question(self, "カテゴリ追加", f"「{category}」を「{genre}」のカテゴリ一覧へ追加しますか？") == QMessageBox.Yes:
+            self.categories_by_genre = self.category_service.add_category(genre, category, self.categories_by_genre)
+            self.category_service.save(self.categories_by_genre)
+            self.refresh_category_ui()
+
+    def bulk_update_selected_projects(self) -> None:
+        selected_paths = [Path(item.data(Qt.UserRole)) for item in self.project_list.selectedItems()]
+        if not selected_paths:
+            QMessageBox.warning(self, "一括変更", "変更するプロジェクトを選択してください。")
+            return
+        selected_projects = [project for project in self.projects if project.path in selected_paths]
+        genre = self.category_manage_genre_box.currentText() or self.genre_box.currentText()
+        selected_category = self.category_manage_list.currentItem()
+        category = selected_category.text() if selected_category else self.category_box.currentText().strip()
+        series, ok = QInputDialog.getText(self, "一括カテゴリ変更", "シリーズ名（空欄なら変更しません）")
+        if not ok:
+            return
+        tag_text, ok = QInputDialog.getText(self, "一括タグ変更", "追加タグ（カンマ区切り、空欄可）")
+        if not ok:
+            return
+        remove_tag_text, ok = QInputDialog.getText(self, "一括タグ削除", "削除タグ（カンマ区切り、空欄可）")
+        if not ok:
+            return
+        if QMessageBox.question(self, "一括変更", f"{len(selected_projects)}件のジャンル/カテゴリ/シリーズ/タグを変更しますか？") != QMessageBox.Yes:
+            return
+        add_tags = self.tag_service.parse_youtube_text(tag_text)
+        remove_tags = self.tag_service.parse_youtube_text(remove_tag_text)
+        self.project_service.bulk_update_classification(
+            selected_projects,
+            genre=genre,
+            category=category,
+            series=series.strip(),
+            add_tags=add_tags,
+            remove_tags=remove_tags,
+        )
+        self.reload_projects()
+        self.status_label.setText(f"{len(selected_projects)}件のカテゴリ情報を一括変更しました。")
 
     def _set_image_count(self, image_count: int) -> None:
         value = str(image_count if image_count in {3, 4, 5, 6, 8} else 5)
@@ -2274,7 +2597,21 @@ class MainWindow(QMainWindow):
         title = project.title or project.topic or project.name
         tags = f" #{' #'.join(project.tags[:3])}" if project.tags else ""
         series = f"{project.series}{project.series_number:03d}" if project.series else project.name
-        return f"{title}  [{done_count}/{len(PROGRESS_ITEMS)}]\n{series} / {project.genre}{tags}"
+        category = project.category or UNCATEGORIZED
+        return f"{title}  [{done_count}/{len(PROGRESS_ITEMS)}]\n{project.genre or '未設定'} > {category}\n{series}{tags}"
+
+    def _project_tooltip(self, project: ProjectInfo) -> str:
+        tags = ", ".join(project.tags) if project.tags else "-"
+        return "\n".join(
+            [
+                project.title or project.topic or project.name,
+                f"ジャンル: {project.genre or '-'}",
+                f"カテゴリ: {project.category or UNCATEGORIZED}",
+                f"シリーズ: {project.series or '-'} #{project.series_number:03d}",
+                f"タグ: {tags}",
+                f"再生数: {project.analytics_views:,}",
+            ]
+        )
 
     def _read_text(self, path: Path) -> str:
         try:

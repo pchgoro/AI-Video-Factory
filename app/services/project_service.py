@@ -43,6 +43,7 @@ class ProjectService:
         template_name: str = "",
         tags: list[str] | None = None,
         series: str | None = None,
+        category: str = "",
     ) -> ProjectInfo:
         series_name = (series or topic).strip()
         series_number = self.next_series_number(series_name)
@@ -57,6 +58,7 @@ class ProjectService:
             "topic": topic,
             "title": "",
             "genre": genre,
+            "category": category,
             "duration": duration,
             "image_count": image_count,
             "template_name": template_name,
@@ -102,6 +104,7 @@ class ProjectService:
         self,
         topics: list[str],
         genre: str,
+        category: str,
         duration: str,
         image_count: int,
         template_name: str,
@@ -111,7 +114,7 @@ class ProjectService:
         projects = []
         for topic in topics:
             prompt = prompt_builder(topic)
-            projects.append(self.create_project(topic, genre, duration, image_count, prompt, template_name, tags, topic))
+            projects.append(self.create_project(topic, genre, duration, image_count, prompt, template_name, tags, topic, category))
         return projects
 
     def load_project(self, path: Path) -> ProjectInfo:
@@ -122,6 +125,7 @@ class ProjectService:
             topic=str(metadata.get("topic") or self._read_text(path / "topic.txt").strip()),
             title=str(metadata.get("title") or self._read_text(path / "title.txt").strip()),
             genre=str(metadata.get("genre", "")),
+            category=str(metadata.get("category", "")),
             duration=str(metadata.get("duration", "")),
             image_count=int(metadata.get("image_count", 5)),
             template_name=str(metadata.get("template_name", "")),
@@ -135,6 +139,13 @@ class ProjectService:
             updated_at=str(metadata.get("updated_at", "")),
         )
         info.progress = self.detect_progress(path, info.image_count)
+        analytics = metadata.get("analytics", {})
+        if isinstance(analytics, dict):
+            records = [value for value in analytics.values() if isinstance(value, dict)]
+            info.analytics_views = max([int(value.get("views", 0) or 0) for value in records], default=0)
+            info.analytics_rating = int(metadata.get("analytics_rating", 0) or 0)
+        posting_status = metadata.get("posting_status", {})
+        info.csv_posted = bool(isinstance(posting_status, dict) and posting_status.get("csv_confirmed"))
         return info
 
     def save_chatgpt_import(self, project: ProjectInfo, raw_text: str, parsed: ParsedChatGptAnswer) -> None:
@@ -174,6 +185,59 @@ class ProjectService:
             updates["tiktok_tags"] = tiktok_tags
         self.update_metadata(project.path, updates)
         return self.load_project(project.path)
+
+    def update_project_classification(
+        self,
+        project: ProjectInfo,
+        genre: str | None = None,
+        category: str | None = None,
+        series: str | None = None,
+        add_tags: list[str] | None = None,
+        remove_tags: list[str] | None = None,
+    ) -> ProjectInfo:
+        updates: dict[str, object] = {}
+        if genre is not None:
+            updates["genre"] = genre
+        if category is not None:
+            updates["category"] = category
+        if series is not None:
+            updates["series"] = series
+        tags = list(project.tags)
+        for tag in add_tags or []:
+            clean = tag.strip().lstrip("#")
+            if clean and clean not in tags:
+                tags.append(clean)
+        remove_set = {tag.strip().lstrip("#") for tag in remove_tags or [] if tag.strip()}
+        if remove_set:
+            tags = [tag for tag in tags if tag.strip().lstrip("#") not in remove_set]
+        if add_tags or remove_tags:
+            updates["tags"] = tags
+            updates["youtube_tags"] = tags
+        self.update_metadata(project.path, updates)
+        return self.load_project(project.path)
+
+    def bulk_update_classification(
+        self,
+        projects: list[ProjectInfo],
+        genre: str = "",
+        category: str = "",
+        series: str = "",
+        add_tags: list[str] | None = None,
+        remove_tags: list[str] | None = None,
+    ) -> list[ProjectInfo]:
+        updated = []
+        for project in projects:
+            updated.append(
+                self.update_project_classification(
+                    project,
+                    genre=genre or None,
+                    category=category or None,
+                    series=series or None,
+                    add_tags=add_tags,
+                    remove_tags=remove_tags,
+                )
+            )
+        return updated
 
     def save_texts(self, project_dir: Path, values: dict[str, str], touch_metadata: bool = True) -> None:
         project_dir.mkdir(parents=True, exist_ok=True)

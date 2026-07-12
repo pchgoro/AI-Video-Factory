@@ -75,6 +75,10 @@ class AppPaths:
         return self.base_dir / "templates.json"
 
     @property
+    def categories_path(self) -> Path:
+        return self.base_dir / "categories.json"
+
+    @property
     def version_path(self) -> Path:
         return self.base_dir / "version.json"
 

@@ -24,6 +24,7 @@ class AnalyticsRecord:
     comments: int = 0
     posted_date: str = ""
     genre: str = "未分類"
+    category: str = ""
     platform: str = "CSV"
     project_name: str = ""
     rating: int = 1
@@ -69,6 +70,10 @@ class GroupMetric:
     count: int
     average_views: float
     average_likes: float
+    total_views: int = 0
+    average_like_rate: float = 0.0
+    average_view_percentage: float = 0.0
+    average_rating: float = 0.0
 
 
 @dataclass
@@ -84,6 +89,7 @@ class AnalyticsReport:
     summary: AnalyticsSummary = field(default_factory=AnalyticsSummary)
     rankings: dict[str, list[AnalyticsRecord]] = field(default_factory=dict)
     genre_metrics: list[GroupMetric] = field(default_factory=list)
+    category_metrics: list[GroupMetric] = field(default_factory=list)
     word_metrics: list[WordMetric] = field(default_factory=list)
     pattern_metrics: list[GroupMetric] = field(default_factory=list)
     comments: list[str] = field(default_factory=list)
@@ -130,6 +136,8 @@ class AnalyticsService:
                 record.project_name = project.name
                 if not record.genre or record.genre == "未分類":
                     record.genre = project.genre or "未分類"
+                if not record.category:
+                    record.category = project.category
         report = self.build_report(dataset.records)
         report.graph_rows = dataset.daily_rows
         report.totals = dataset.totals
@@ -152,6 +160,7 @@ class AnalyticsService:
             summary=summary,
             rankings=rankings,
             genre_metrics=self._group_metrics(records, lambda item: item.genre or "未分類"),
+            category_metrics=self._group_metrics(records, lambda item: self._category_label(item)),
             word_metrics=self._word_metrics(records),
             pattern_metrics=self._group_metrics(records, self.title_pattern),
         )
@@ -190,12 +199,13 @@ class AnalyticsService:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             with output_path.open("w", encoding="utf-8-sig", newline="") as file:
                 writer = csv.writer(file)
-                writer.writerow(["title", "genre", "views", "likes", "comments", "like_rate", "comment_rate", "rating", "posted_date", "platform"])
+                writer.writerow(["title", "genre", "category", "views", "likes", "comments", "like_rate", "comment_rate", "rating", "posted_date", "platform"])
                 for record in report.records:
                     writer.writerow(
                         [
                             record.title,
                             record.genre,
+                            record.category,
                             record.views,
                             record.likes,
                             record.comments,
@@ -344,6 +354,10 @@ class AnalyticsService:
                 count=len(items),
                 average_views=sum(item.views for item in items) / len(items),
                 average_likes=sum(item.likes for item in items) / len(items),
+                total_views=sum(item.views for item in items),
+                average_like_rate=sum(item.like_rate for item in items) / len(items),
+                average_view_percentage=sum(item.average_percentage_viewed for item in items) / len(items),
+                average_rating=sum(item.rating for item in items) / len(items),
             )
             for name, items in groups.items()
             if items
@@ -375,6 +389,10 @@ class AnalyticsService:
             top_genre = report.genre_metrics[0]
             diff = (top_genre.average_views - average_views) / average_views * 100
             comments.append(f"{top_genre.name}系は平均より{diff:.0f}%再生されています。")
+        if report.category_metrics:
+            top_category = report.category_metrics[0]
+            if top_category.name != "未分類":
+                comments.append(f"{top_category.name}カテゴリが好調です。平均再生数は{top_category.average_views:,.0f}回です。")
         if report.pattern_metrics:
             top_pattern = report.pattern_metrics[0]
             comments.append(f"{top_pattern.name}タイトルの平均再生数が高いです。")
@@ -399,7 +417,7 @@ class AnalyticsService:
         index: dict[str, ProjectInfo] = {}
         for project in projects:
             video_names = [path.stem for path in (project.path / "video").glob("*.mp4")] if (project.path / "video").exists() else []
-            for value in [project.title, project.topic, project.name, project.series, *video_names]:
+            for value in [project.title, project.topic, project.name, project.series, project.genre, project.category, " ".join(project.tags), *video_names]:
                 normalized = self._normalize_match_text(value)
                 if normalized:
                     index[normalized] = project
@@ -419,6 +437,12 @@ class AnalyticsService:
                 best_score = score
                 best_project = project
         return best_project if best_score >= 0.72 else None
+
+    def _category_label(self, record: AnalyticsRecord) -> str:
+        category = record.category or "未分類"
+        if record.genre and record.genre != "未分類" and category != "未分類":
+            return f"{record.genre} > {category}"
+        return category
 
     def _detect_platform(self, path: Path, headers) -> str:
         haystack = f"{path.name} {' '.join(headers)}".lower()

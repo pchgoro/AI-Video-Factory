@@ -136,7 +136,7 @@ class AnalyticsLinkService:
     def _project_candidates(self, projects: list[ProjectInfo]) -> list[tuple[ProjectInfo, list[str]]]:
         result: list[tuple[ProjectInfo, list[str]]] = []
         for project in projects:
-            candidates = [project.title, project.topic, project.name, project.series]
+            candidates = [project.title, project.topic, project.name, project.series, project.genre, project.category, " ".join(project.tags)]
             for file_name in ["title.txt", "topic.txt"]:
                 try:
                     candidates.append((project.path / file_name).read_text(encoding="utf-8").strip())
