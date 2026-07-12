@@ -165,6 +165,7 @@ class MainWindow(QMainWindow):
         self.topics: list[str] = []
         self.templates: list[PromptTemplate] = []
         self.categories_by_genre: dict[str, list[str]] = {}
+        self._suspend_project_classification_save = False
 
         self.media_player = None
         self.audio_output = None
@@ -199,34 +200,43 @@ class MainWindow(QMainWindow):
     def _build_left_panel(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
+        layout.setContentsMargins(8, 8, 8, 8)
         header = QHBoxLayout()
         title = QLabel("AI Video Factory")
         title.setStyleSheet("font-size: 20px; font-weight: 700;")
         settings_button = QPushButton("設定")
+        settings_button.setMinimumWidth(72)
+        settings_button.setMaximumWidth(86)
         settings_button.clicked.connect(self.open_settings)
         header.addWidget(title)
         header.addStretch()
         header.addWidget(settings_button)
         layout.addLayout(header)
 
+        filter_panel = QWidget()
+        filter_layout = QVBoxLayout(filter_panel)
+        filter_layout.setContentsMargins(0, 0, 0, 0)
+        filter_layout.setSpacing(6)
         self.project_search = QLineEdit()
         self.project_search.setPlaceholderText("タイトル / テーマ / ジャンル / 投稿日 / シリーズ / タグで検索")
         self.project_search.textChanged.connect(self.refresh_project_list)
-        layout.addWidget(self.project_search)
+        filter_layout.addWidget(self.project_search)
 
         self.genre_filter = QComboBox()
         self.genre_filter.currentTextChanged.connect(self.on_project_filter_genre_changed)
-        layout.addWidget(self.genre_filter)
+        filter_layout.addWidget(self.genre_filter)
 
         self.category_filter = QComboBox()
         self.category_filter.currentTextChanged.connect(self.on_project_filter_category_changed)
-        layout.addWidget(self.category_filter)
+        filter_layout.addWidget(self.category_filter)
 
         self.series_filter = QComboBox()
         self.series_filter.currentTextChanged.connect(self.refresh_project_list)
-        layout.addWidget(self.series_filter)
+        filter_layout.addWidget(self.series_filter)
 
         filter_grid = QGridLayout()
+        filter_grid.setContentsMargins(0, 0, 0, 0)
+        filter_grid.setVerticalSpacing(6)
         self.tag_filter = QLineEdit()
         self.tag_filter.setPlaceholderText("タグ")
         self.tag_filter.textChanged.connect(self.refresh_project_list)
@@ -251,10 +261,14 @@ class MainWindow(QMainWindow):
         filter_grid.addWidget(self.project_rating_filter, 2, 0)
         filter_grid.addWidget(self.project_min_views_filter, 2, 1)
         filter_grid.addWidget(reset_filter_button, 3, 0, 1, 2)
-        layout.addLayout(filter_grid)
+        filter_layout.addLayout(filter_grid)
 
         self.project_count_label = QLabel("表示中: 0件 / 全0件")
-        layout.addWidget(self.project_count_label)
+        filter_layout.addWidget(self.project_count_label)
+        filter_panel.setMinimumHeight(120)
+        filter_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
+        filter_scroll = self._splitter_scroll_area(filter_panel)
+        filter_scroll.setMinimumHeight(64)
 
         self.project_list = QListWidget()
         self.project_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -362,9 +376,10 @@ class MainWindow(QMainWindow):
         self.left_content_splitter = QSplitter(Qt.Vertical)
         self.left_content_splitter.setHandleWidth(8)
         self.left_content_splitter.setChildrenCollapsible(False)
+        self.left_content_splitter.addWidget(filter_scroll)
         self.left_content_splitter.addWidget(project_list_widget)
         self.left_content_splitter.addWidget(topic_scroll)
-        self.left_content_splitter.setSizes([260, 420])
+        self.left_content_splitter.setSizes([230, 260, 420])
         layout.addWidget(self.left_content_splitter, stretch=1)
         return panel
 
@@ -538,11 +553,15 @@ class MainWindow(QMainWindow):
         self.duration_box = QComboBox()
         self.duration_box.addItems(DEFAULT_DURATIONS)
         self.genre_box = QComboBox()
-        self.genre_box.currentTextChanged.connect(self.refresh_form_categories)
+        self.genre_box.currentTextChanged.connect(self.on_wizard_genre_changed)
         self.category_box = QComboBox()
         self.category_box.setEditable(True)
+        self.category_box.currentIndexChanged.connect(self.save_current_project_classification)
+        if self.category_box.lineEdit():
+            self.category_box.lineEdit().editingFinished.connect(self.save_current_project_classification)
         self.series_input = QLineEdit()
         self.series_input.setPlaceholderText("例: ブラックホール基礎")
+        self.series_input.editingFinished.connect(self.save_current_project_classification)
         self.image_count_box = QComboBox()
         self.image_count_box.addItems(["3", "4", "5", "6", "8"])
         self.youtube_tags_input = QLineEdit()
@@ -1629,14 +1648,18 @@ class MainWindow(QMainWindow):
 
     def _load_project(self, path: Path) -> None:
         self.current_project = self.project_service.load_project(path)
-        self.topic_input.setText(self.current_project.topic)
-        self.duration_box.setCurrentText(self.current_project.duration or self.settings.default_duration)
-        self.genre_box.setCurrentText(self.current_project.genre)
-        self.refresh_form_categories()
-        self.category_box.setCurrentText(self.current_project.category)
-        self.series_input.setText(self.current_project.series)
-        self._set_image_count(self.current_project.image_count)
-        self.template_box.setCurrentText(self.current_project.template_name)
+        self._suspend_project_classification_save = True
+        try:
+            self.topic_input.setText(self.current_project.topic)
+            self.duration_box.setCurrentText(self.current_project.duration or self.settings.default_duration)
+            self.genre_box.setCurrentText(self.current_project.genre)
+            self.refresh_form_categories()
+            self.category_box.setCurrentText(self.current_project.category)
+            self.series_input.setText(self.current_project.series)
+            self._set_image_count(self.current_project.image_count)
+            self.template_box.setCurrentText(self.current_project.template_name)
+        finally:
+            self._suspend_project_classification_save = False
         self._load_project_texts(self.current_project.path)
         self._load_platform_tag_fields()
         self.update_progress_view()
@@ -1666,6 +1689,10 @@ class MainWindow(QMainWindow):
             self.genre_box.setCurrentText(template.genre)
             self.refresh_form_categories()
 
+    def on_wizard_genre_changed(self) -> None:
+        self.refresh_form_categories()
+        self.save_current_project_classification()
+
     def refresh_form_categories(self) -> None:
         if not hasattr(self, "category_box"):
             return
@@ -1690,6 +1717,39 @@ class MainWindow(QMainWindow):
                 self.bulk_category_box.addItem(bulk_current)
             if bulk_current:
                 self.bulk_category_box.setCurrentText(bulk_current)
+
+    def save_current_project_classification(self) -> None:
+        if self._suspend_project_classification_save or not self.current_project:
+            return
+        genre = self.genre_box.currentText().strip()
+        category = self.category_box.currentText().strip()
+        series = self.series_input.text().strip()
+        if (
+            genre == self.current_project.genre
+            and category == self.current_project.category
+            and series == self.current_project.series
+        ):
+            return
+        self.ensure_category_registered(genre, category)
+        try:
+            updated = self.project_service.update_project_classification(
+                self.current_project,
+                genre=genre,
+                category=category,
+                series=series,
+            )
+        except OSError as exc:
+            QMessageBox.critical(self, "保存エラー", f"カテゴリ情報の保存に失敗しました。\n{exc}")
+            return
+        self.current_project = updated
+        for index, project in enumerate(self.projects):
+            if project.path == updated.path:
+                self.projects[index] = updated
+                break
+        self.refresh_project_category_filter()
+        self.refresh_project_series_filter()
+        self.refresh_project_list()
+        self.refresh_dashboard()
 
     def refresh_category_manage_list(self) -> None:
         if not hasattr(self, "category_manage_list"):
