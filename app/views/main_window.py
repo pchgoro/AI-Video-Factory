@@ -265,10 +265,12 @@ class MainWindow(QMainWindow):
 
         self.project_count_label = QLabel("表示中: 0件 / 全0件")
         filter_layout.addWidget(self.project_count_label)
-        filter_panel.setMinimumHeight(120)
+        filter_panel.setMinimumHeight(250)
         filter_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         filter_scroll = self._splitter_scroll_area(filter_panel)
         filter_scroll.setMinimumHeight(64)
+        filter_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        filter_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         self.project_list = QListWidget()
         self.project_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -379,7 +381,7 @@ class MainWindow(QMainWindow):
         self.left_content_splitter.addWidget(filter_scroll)
         self.left_content_splitter.addWidget(project_list_widget)
         self.left_content_splitter.addWidget(topic_scroll)
-        self.left_content_splitter.setSizes([230, 260, 420])
+        self.left_content_splitter.setSizes([170, 260, 420])
         layout.addWidget(self.left_content_splitter, stretch=1)
         return panel
 
@@ -777,8 +779,12 @@ class MainWindow(QMainWindow):
         top_row = QHBoxLayout()
         top_row.addWidget(QLabel("ジャンル"))
         self.compilation_genre_box = QComboBox()
-        self.compilation_genre_box.currentTextChanged.connect(self.refresh_compilation_project_list)
+        self.compilation_genre_box.currentTextChanged.connect(self.on_compilation_genre_changed)
         top_row.addWidget(self.compilation_genre_box, stretch=1)
+        top_row.addWidget(QLabel("カテゴリ"))
+        self.compilation_category_box = QComboBox()
+        self.compilation_category_box.currentTextChanged.connect(self.refresh_compilation_project_list)
+        top_row.addWidget(self.compilation_category_box, stretch=1)
         refresh_button = QPushButton("更新")
         refresh_button.clicked.connect(self.refresh_compilation_genres)
         top_row.addWidget(refresh_button)
@@ -1603,27 +1609,55 @@ class MainWindow(QMainWindow):
         if current in genres:
             self.compilation_genre_box.setCurrentText(current)
         self.compilation_genre_box.blockSignals(False)
+        self.refresh_compilation_categories()
         self.refresh_compilation_project_list()
+
+    def on_compilation_genre_changed(self) -> None:
+        self.refresh_compilation_categories()
+        self.refresh_compilation_project_list()
+
+    def refresh_compilation_categories(self) -> None:
+        if not hasattr(self, "compilation_category_box"):
+            return
+        current = self.compilation_category_box.currentData() or self.compilation_category_box.currentText()
+        genre = self.compilation_genre_box.currentText() if hasattr(self, "compilation_genre_box") else ""
+        categories = sorted(
+            {
+                project.category or UNCATEGORIZED
+                for project in self.projects
+                if project.genre == genre and (project.path / "video" / "final.mp4").exists()
+            }
+        )
+        self.compilation_category_box.blockSignals(True)
+        self.compilation_category_box.clear()
+        self.compilation_category_box.addItem("すべてのカテゴリ", "")
+        for category in categories:
+            self.compilation_category_box.addItem(category, category)
+        if self.compilation_category_box.findData(current) >= 0:
+            self.compilation_category_box.setCurrentIndex(self.compilation_category_box.findData(current))
+        self.compilation_category_box.blockSignals(False)
 
     def refresh_compilation_project_list(self) -> None:
         if not hasattr(self, "compilation_project_list"):
             return
         genre = self.compilation_genre_box.currentText()
-        projects = self._compilation_projects(genre)
+        category = self.compilation_category_box.currentData() if hasattr(self, "compilation_category_box") else ""
+        projects = self._compilation_projects(genre, category)
         self.compilation_project_list.clear()
         total_duration = 0.0
         for project in projects:
             video_path = project.path / "video" / "final.mp4"
             total_duration += self.compilation_service.media_duration(video_path) or self._duration_seconds(project.duration)
             series_label = f"{project.series}{project.series_number:03d}" if project.series else project.name
-            label = f"{series_label}  {project.title or project.topic or project.name}"
+            category_label = project.category or UNCATEGORIZED
+            label = f"{series_label}  {project.title or project.topic or project.name}  [{category_label}]"
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, str(project.path))
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked)
             self.compilation_project_list.addItem(item)
         self.compilation_summary_label.setText(
-            f"ジャンル: {genre or '-'} / 動画本数: {len(projects)} / 総時間: {self.compilation_service.format_timestamp(total_duration)}"
+            f"ジャンル: {genre or '-'} / カテゴリ: {category or 'すべて'} / 動画本数: {len(projects)} / 総時間: {self.compilation_service.format_timestamp(total_duration)}"
         )
 
     def refresh_topic_list(self) -> None:
@@ -2043,7 +2077,7 @@ class MainWindow(QMainWindow):
             self.paths.exports_dir / "series",
             intro_path=intro_path,
             ending_path=ending_path,
-            output_name=self.compilation_genre_box.currentText() or None,
+            output_name=self._compilation_output_name(),
             intro_options=BrandingSegmentOptions(
                 duration=self.settings.intro_duration_seconds,
                 motion=self.settings.intro_motion,
@@ -2084,12 +2118,23 @@ class MainWindow(QMainWindow):
         self.compilation_project_list.insertItem(next_row, item)
         self.compilation_project_list.setCurrentRow(next_row)
 
-    def _compilation_projects(self, genre: str) -> list[ProjectInfo]:
+    def _compilation_output_name(self) -> str | None:
+        genre = self.compilation_genre_box.currentText().strip()
+        category = ""
+        if hasattr(self, "compilation_category_box"):
+            category = str(self.compilation_category_box.currentData() or "").strip()
+        if genre and category:
+            return f"{genre}_{category}"
+        return genre or None
+
+    def _compilation_projects(self, genre: str, category: str = "") -> list[ProjectInfo]:
         return sorted(
             [
                 project
                 for project in self.projects
-                if project.genre == genre and (project.path / "video" / "final.mp4").exists()
+                if project.genre == genre
+                and (not category or (project.category or UNCATEGORIZED) == category)
+                and (project.path / "video" / "final.mp4").exists()
             ],
             key=lambda project: (project.series, project.series_number, project.name),
         )
