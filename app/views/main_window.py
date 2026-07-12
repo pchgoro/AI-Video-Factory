@@ -1621,17 +1621,16 @@ class MainWindow(QMainWindow):
             return
         current = self.compilation_category_box.currentData() or self.compilation_category_box.currentText()
         genre = self.compilation_genre_box.currentText() if hasattr(self, "compilation_genre_box") else ""
-        categories = sorted(
-            {
-                project.category or UNCATEGORIZED
-                for project in self.projects
-                if project.genre == genre and (project.path / "video" / "final.mp4").exists()
-            }
+        categories = set(self.categories_by_genre.get(genre, []))
+        categories.update(
+            project.category or UNCATEGORIZED
+            for project in self.projects
+            if project.genre == genre and (project.path / "video" / "final.mp4").exists()
         )
         self.compilation_category_box.blockSignals(True)
         self.compilation_category_box.clear()
         self.compilation_category_box.addItem("すべてのカテゴリ", "")
-        for category in categories:
+        for category in sorted(categories):
             self.compilation_category_box.addItem(category, category)
         if self.compilation_category_box.findData(current) >= 0:
             self.compilation_category_box.setCurrentIndex(self.compilation_category_box.findData(current))
