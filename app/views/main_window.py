@@ -325,6 +325,10 @@ class MainWindow(QMainWindow):
         start_bulk_button.clicked.connect(self.start_bulk_projects)
         topic_controls_layout.addWidget(start_bulk_button)
 
+        classification_panel = QWidget()
+        classification_layout = QVBoxLayout(classification_panel)
+        classification_layout.setContentsMargins(0, 0, 0, 0)
+
         category_box = QGroupBox("カテゴリ管理")
         category_layout = QVBoxLayout(category_box)
         self.category_manage_genre_box = QComboBox()
@@ -345,7 +349,8 @@ class MainWindow(QMainWindow):
             button.clicked.connect(handler)
             category_buttons.addWidget(button, index // 2, index % 2)
         category_layout.addLayout(category_buttons)
-        topic_controls_layout.addWidget(category_box)
+        classification_layout.addWidget(category_box)
+        classification_layout.addStretch()
 
         memo_box = QGroupBox("メモ")
         memo_layout = QVBoxLayout(memo_box)
@@ -375,14 +380,23 @@ class MainWindow(QMainWindow):
         self.topic_management_splitter.setMinimumHeight(720)
         topic_layout.addWidget(self.topic_management_splitter)
         topic_scroll = self._splitter_scroll_area(topic_box)
+
+        project_tab = QWidget()
+        project_tab_layout = QVBoxLayout(project_tab)
+        project_tab_layout.setContentsMargins(0, 0, 0, 0)
         self.left_content_splitter = QSplitter(Qt.Vertical)
         self.left_content_splitter.setHandleWidth(8)
         self.left_content_splitter.setChildrenCollapsible(False)
         self.left_content_splitter.addWidget(filter_scroll)
         self.left_content_splitter.addWidget(project_list_widget)
-        self.left_content_splitter.addWidget(topic_scroll)
-        self.left_content_splitter.setSizes([300, 320, 270])
-        layout.addWidget(self.left_content_splitter, stretch=1)
+        self.left_content_splitter.setSizes([300, 360])
+        project_tab_layout.addWidget(self.left_content_splitter)
+
+        left_tabs = QTabWidget()
+        left_tabs.addTab(project_tab, "プロジェクト")
+        left_tabs.addTab(topic_scroll, "ネタ")
+        left_tabs.addTab(self._splitter_scroll_area(classification_panel), "分類")
+        layout.addWidget(left_tabs, stretch=1)
         return panel
 
     def _build_main_tabs(self) -> QTabWidget:
