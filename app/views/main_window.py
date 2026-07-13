@@ -1595,6 +1595,8 @@ class MainWindow(QMainWindow):
     def refresh_compilation_genres(self) -> None:
         if not hasattr(self, "compilation_genre_box"):
             return
+        self.categories_by_genre = self.category_service.load()
+        self.projects = self.project_service.list_projects()
         current = self.compilation_genre_box.currentText()
         genres = sorted(
             {
@@ -1625,7 +1627,7 @@ class MainWindow(QMainWindow):
         categories.update(
             project.category or UNCATEGORIZED
             for project in self.projects
-            if project.genre == genre and (project.path / "video" / "final.mp4").exists()
+            if project.genre == genre
         )
         self.compilation_category_box.blockSignals(True)
         self.compilation_category_box.clear()
