@@ -191,6 +191,14 @@ class ProjectService:
         self.update_metadata(project.path, updates)
         return self.load_project(project.path)
 
+    def save_topic(self, project: ProjectInfo, topic: str) -> ProjectInfo:
+        clean_topic = topic.strip()
+        if not clean_topic:
+            raise ValueError("テーマを入力してください。")
+        self.save_texts(project.path, {"topic.txt": clean_topic + "\n"}, touch_metadata=False)
+        self.update_metadata(project.path, {"topic": clean_topic})
+        return self.load_project(project.path)
+
     def update_project_classification(
         self,
         project: ProjectInfo,

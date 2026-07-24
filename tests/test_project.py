@@ -76,3 +76,15 @@ def test_chatgpt_import_syncs_topic_from_title(tmp_path) -> None:
     assert reloaded.title == "The Multiverse Mystery"
     assert reloaded.topic == "The Multiverse Mystery"
     assert (project.path / "topic.txt").read_text(encoding="utf-8").strip() == "The Multiverse Mystery"
+
+
+def test_save_topic_updates_project_topic(tmp_path) -> None:
+    paths = AppPaths(tmp_path)
+    paths.ensure()
+    service = ProjectService(paths)
+    project = service.create_project("old topic", "space", "60s", 3, "prompt")
+
+    reloaded = service.save_topic(project, "new topic")
+
+    assert reloaded.topic == "new topic"
+    assert (project.path / "topic.txt").read_text(encoding="utf-8").strip() == "new topic"

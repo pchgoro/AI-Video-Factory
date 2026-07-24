@@ -586,10 +586,15 @@ class MainWindow(QMainWindow):
         self.tiktok_tags_input.setPlaceholderText("hashtags.txtをコピーし、最後に#VOICEVOXを追加します")
 
         form.addWidget(QLabel("テーマ"), 0, 0)
-        form.addWidget(self.topic_input, 0, 1, 1, 4)
+        form.addWidget(self.topic_input, 0, 1, 1, 3)
         copy_topic_button = QPushButton("テーマコピー")
+        topic_buttons = QHBoxLayout()
+        save_topic_button = QPushButton("テーマ保存")
+        save_topic_button.clicked.connect(self.save_topic_name)
         copy_topic_button.clicked.connect(self.copy_theme_to_clipboard)
-        form.addWidget(copy_topic_button, 0, 5)
+        topic_buttons.addWidget(save_topic_button)
+        topic_buttons.addWidget(copy_topic_button)
+        form.addLayout(topic_buttons, 0, 4, 1, 2)
         form.addWidget(QLabel("テンプレート"), 1, 0)
         form.addWidget(self.template_box, 1, 1)
         form.addWidget(QLabel("動画時間"), 1, 2)
@@ -2185,6 +2190,22 @@ class MainWindow(QMainWindow):
 
     def copy_theme_to_clipboard(self) -> None:
         self._copy_text_to_clipboard(self.topic_input.text().strip(), "テーマ")
+
+    def save_topic_name(self) -> None:
+        if self.current_project is None:
+            QMessageBox.warning(self, "テーマ保存エラー", "先にプロジェクトを作成または選択してください。")
+            return
+        topic = self.topic_input.text().strip()
+        if not topic:
+            QMessageBox.warning(self, "テーマ保存エラー", "テーマを入力してください。")
+            return
+        try:
+            self.current_project = self.project_service.save_topic(self.current_project, topic)
+        except ValueError as exc:
+            QMessageBox.warning(self, "テーマ保存エラー", str(exc))
+            return
+        self.reload_projects()
+        self.status_label.setText("テーマ名を保存しました。")
 
     def copy_youtube_tags_to_clipboard(self) -> None:
         self._copy_text_to_clipboard(self.youtube_tags_input.text().strip(), "YouTubeタグ")
