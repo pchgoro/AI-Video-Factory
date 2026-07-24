@@ -149,11 +149,13 @@ class ProjectService:
         return info
 
     def save_chatgpt_import(self, project: ProjectInfo, raw_text: str, parsed: ParsedChatGptAnswer) -> None:
+        title = parsed.title.strip()
         self.save_texts(
             project.path,
             {
                 "raw_chatgpt.txt": raw_text.strip() + "\n",
-                "title.txt": parsed.title.strip() + "\n",
+                "topic.txt": (title or project.topic).strip() + "\n",
+                "title.txt": title + "\n",
                 "script.txt": parsed.script.strip() + "\n",
                 "voice.txt": (parsed.voice_text or parsed.script).strip() + "\n",
                 "image_prompts.txt": "\n\n".join(parsed.image_prompts).strip() + "\n",
@@ -161,7 +163,10 @@ class ProjectService:
                 "hashtags.txt": parsed.hashtags.strip() + "\n",
             },
         )
-        self.update_metadata(project.path, {"title": parsed.title.strip(), "image_count": len(parsed.image_prompts) or project.image_count})
+        metadata_updates: dict[str, object] = {"title": title, "image_count": len(parsed.image_prompts) or project.image_count}
+        if title:
+            metadata_updates["topic"] = title
+        self.update_metadata(project.path, metadata_updates)
         self.logger.info("ChatGPT回答保存: %s", project.path)
 
     def save_preview_files(self, project: ProjectInfo, values: dict[str, str]) -> None:

@@ -50,3 +50,29 @@ def test_project_create_save_reload_delete(tmp_path) -> None:
 
     service.delete_project(reloaded)
     assert not project.path.exists()
+
+
+def test_chatgpt_import_syncs_topic_from_title(tmp_path) -> None:
+    paths = AppPaths(tmp_path)
+    paths.ensure()
+    service = ProjectService(paths)
+    project = service.create_project("multiverse", "space", "60s", 3, "prompt")
+    raw = json.dumps(
+        {
+            "title": "The Multiverse Mystery",
+            "script": "script",
+            "voice_text": "voice",
+            "image_prompts": ["p1", "p2", "p3"],
+            "subtitles": [{"text": "caption", "start": 0.0, "end": 2.0}],
+            "hashtags": ["#space"],
+        },
+        ensure_ascii=False,
+    )
+    parsed = ChatGptAnswerParser().parse(raw)
+
+    service.save_chatgpt_import(project, raw, parsed)
+
+    reloaded = service.load_project(project.path)
+    assert reloaded.title == "The Multiverse Mystery"
+    assert reloaded.topic == "The Multiverse Mystery"
+    assert (project.path / "topic.txt").read_text(encoding="utf-8").strip() == "The Multiverse Mystery"
