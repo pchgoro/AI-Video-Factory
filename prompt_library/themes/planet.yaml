@@ -1,0 +1,34 @@
+id: planet
+name: Planet
+version: "1.0"
+extends: generic_space
+priority: 70
+keywords:
+  - planet
+  - planetary
+  - 惑星
+  - 地球
+  - 火星
+  - 木星
+  - 土星
+  - 海王星
+  - 天王星
+quality:
+  required:
+    - realistic planetary body
+  optional:
+    - natural atmospheric lighting when relevant
+subject:
+  required:
+    - spherical planetary scale when visible
+negative:
+  default: []
+  theme_specific:
+    - no flat map unless requested
+scientific_guidance:
+  required:
+    - avoid impossible terrain scale unless stylized by the original prompt
+  optional:
+    - atmosphere and clouds only when relevant
+scenes: []
+disabled_rules: []

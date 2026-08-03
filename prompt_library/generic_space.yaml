@@ -1,0 +1,66 @@
+id: generic_space
+name: Generic Space
+version: "1.0"
+priority: 1
+keywords:
+  - space
+  - universe
+  - cosmos
+  - 宇宙
+quality:
+  required:
+    - cinematic space documentary style
+    - physically believable lighting
+  optional:
+    - deep space background
+    - high detail
+subject:
+  required:
+    - clear primary subject
+negative:
+  default:
+    - no text
+    - no logo
+    - no watermark
+  theme_specific: []
+scientific_guidance:
+  required: []
+  optional:
+    - avoid toy-like scale
+scenes:
+  - id: establishing
+    camera:
+      - wide establishing shot
+      - distant camera
+    composition:
+      - readable main subject
+    short:
+      - wide shot
+  - id: close_up
+    camera:
+      - close subject detail
+    lighting:
+      - dramatic side lighting
+    short:
+      - close detail
+  - id: dynamic
+    composition:
+      - dynamic diagonal composition
+      - sense of motion and scale
+    short:
+      - dynamic composition
+  - id: orbital
+    camera:
+      - orbital perspective
+    composition:
+      - layered depth
+    short:
+      - orbital view
+  - id: ending
+    camera:
+      - quiet final wide shot
+    composition:
+      - isolated subject against deep space
+    short:
+      - final wide shot
+disabled_rules: []

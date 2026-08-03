@@ -63,6 +63,10 @@ class AppPaths:
         return self.base_dir / "sample_images"
 
     @property
+    def prompt_library_dir(self) -> Path:
+        return self.base_dir / "prompt_library"
+
+    @property
     def settings_path(self) -> Path:
         return self.base_dir / "settings.json"
 
@@ -96,5 +100,6 @@ class AppPaths:
             self.logs_dir,
             self.samples_dir,
             self.sample_images_dir,
+            self.prompt_library_dir,
         ]:
             path.mkdir(parents=True, exist_ok=True)

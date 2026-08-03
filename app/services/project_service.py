@@ -137,6 +137,8 @@ class ProjectService:
             posted_date=str(metadata.get("posted_date", "")),
             created_at=str(metadata.get("created_at", "")),
             updated_at=str(metadata.get("updated_at", "")),
+            content_source=str(metadata.get("content_source", "")),
+            content_exported_at=str(metadata.get("content_exported_at", "")),
         )
         info.progress = self.detect_progress(path, info.image_count)
         analytics = metadata.get("analytics", {})
@@ -146,6 +148,14 @@ class ProjectService:
             info.analytics_rating = int(metadata.get("analytics_rating", 0) or 0)
         posting_status = metadata.get("posting_status", {})
         info.csv_posted = bool(isinstance(posting_status, dict) and posting_status.get("csv_confirmed"))
+        job = metadata.get("job", {})
+        info.job = dict(job) if isinstance(job, dict) else {}
+        youtube_upload = metadata.get("youtube_upload", {})
+        info.youtube_upload = dict(youtube_upload) if isinstance(youtube_upload, dict) else {}
+        tiktok_upload = metadata.get("tiktok_upload", {})
+        info.tiktok_upload = dict(tiktok_upload) if isinstance(tiktok_upload, dict) else {}
+        image_generation = metadata.get("image_generation", {})
+        info.image_generation = dict(image_generation) if isinstance(image_generation, dict) else {}
         return info
 
     def save_chatgpt_import(self, project: ProjectInfo, raw_text: str, parsed: ParsedChatGptAnswer) -> None:

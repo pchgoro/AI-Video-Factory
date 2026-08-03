@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
+from dotenv import load_dotenv
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -34,6 +38,7 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("設定")
         self.resize(640, 620)
         self.paths = paths
+        self.settings = settings
 
         root_layout = QVBoxLayout(self)
         scroll = QScrollArea()
@@ -273,6 +278,116 @@ class SettingsDialog(QDialog):
         self.image_common_conditions_edit.setFixedHeight(120)
         form.addRow("画像共通条件", self.image_common_conditions_edit)
 
+        self.image_generation_provider_box = QComboBox()
+        self.image_generation_provider_box.addItems(["cloudflare_workers_ai"])
+        self.image_generation_provider_box.setCurrentText(getattr(settings, "image_generation_provider", "cloudflare_workers_ai"))
+        form.addRow("AI画像Provider", self.image_generation_provider_box)
+
+        self.image_generation_model_box = QComboBox()
+        self.image_generation_model_box.addItems(["@cf/black-forest-labs/flux-1-schnell"])
+        self.image_generation_model_box.setCurrentText(getattr(settings, "image_generation_model", "@cf/black-forest-labs/flux-1-schnell"))
+        form.addRow("AI画像Model", self.image_generation_model_box)
+
+        self.image_generation_steps_box = QSpinBox()
+        self.image_generation_steps_box.setRange(1, 8)
+        self.image_generation_steps_box.setValue(int(getattr(settings, "image_generation_steps", 4)))
+        form.addRow("AI画像Steps", self.image_generation_steps_box)
+
+        self.image_generation_max_run_box = QSpinBox()
+        self.image_generation_max_run_box.setRange(1, 8)
+        self.image_generation_max_run_box.setValue(int(getattr(settings, "image_generation_max_images_per_run", 8)))
+        form.addRow("AI画像 1回上限", self.image_generation_max_run_box)
+
+        self.image_generation_retry_box = QSpinBox()
+        self.image_generation_retry_box.setRange(0, 5)
+        self.image_generation_retry_box.setValue(int(getattr(settings, "image_generation_max_retries_per_image", 2)))
+        form.addRow("AI画像 retry/枚", self.image_generation_retry_box)
+
+        self.image_generation_daily_limit_box = QSpinBox()
+        self.image_generation_daily_limit_box.setRange(0, 1000)
+        self.image_generation_daily_limit_box.setValue(int(getattr(settings, "image_generation_daily_request_limit", 20)))
+        form.addRow("AI画像 日次上限", self.image_generation_daily_limit_box)
+
+        self.image_generation_project_limit_box = QSpinBox()
+        self.image_generation_project_limit_box.setRange(0, 1000)
+        self.image_generation_project_limit_box.setValue(int(getattr(settings, "image_generation_project_limit", 40)))
+        form.addRow("AI画像 project上限", self.image_generation_project_limit_box)
+
+        self.image_prompt_optimizer_check = QCheckBox("Prompt Optimizer ON")
+        self.image_prompt_optimizer_check.setChecked(bool(getattr(settings, "image_prompt_optimizer_enabled", True)))
+        form.addRow("AI Image Prompt Optimizer", self.image_prompt_optimizer_check)
+
+        self.default_story_provider_box = QComboBox()
+        self.default_story_provider_box.addItem("Gemini", "gemini")
+        self.default_story_provider_box.addItem("OpenAI", "openai")
+        self.default_story_provider_box.addItem("Mock", "mock")
+        self.default_story_provider_box.addItem("Manual Prompt", "manual_prompt")
+        provider_index = self.default_story_provider_box.findData(str(getattr(settings, "default_story_provider", "gemini")))
+        self.default_story_provider_box.setCurrentIndex(provider_index if provider_index >= 0 else 0)
+        form.addRow("Story AI Provider", self.default_story_provider_box)
+
+        self.default_story_model_box = QComboBox()
+        self.default_story_model_box.addItems(["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.6-flash", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "Custom"])
+        current_story_model = str(getattr(settings, "default_story_model", "gemini-3.5-flash-lite"))
+        self.default_story_model_box.setCurrentText(
+            current_story_model
+            if current_story_model in {"gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.6-flash", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"}
+            else "Custom"
+        )
+        self.custom_story_model_edit = QLineEdit(
+            ""
+            if current_story_model in {"gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.6-flash", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"}
+            else current_story_model
+        )
+        model_row = QHBoxLayout()
+        model_row.addWidget(self.default_story_model_box)
+        model_row.addWidget(self.custom_story_model_edit)
+        form.addRow("Story AI Model", model_row)
+
+        self.story_reasoning_box = QComboBox()
+        self.story_reasoning_box.addItems(["none", "low", "medium", "high"])
+        self.story_reasoning_box.setCurrentText(str(getattr(settings, "default_reasoning_effort", "low")))
+        form.addRow("Story Reasoning Effort", self.story_reasoning_box)
+
+        self.story_max_output_box = QSpinBox()
+        self.story_max_output_box.setRange(512, 20000)
+        self.story_max_output_box.setValue(int(getattr(settings, "default_max_output_tokens", 4096)))
+        form.addRow("Story Max Output Tokens", self.story_max_output_box)
+
+        self.story_retry_box = QSpinBox()
+        self.story_retry_box.setRange(0, 5)
+        self.story_retry_box.setValue(int(getattr(settings, "story_provider_retry_count", 2)))
+        form.addRow("Story Retry Count", self.story_retry_box)
+
+        self.story_timeout_box = QSpinBox()
+        self.story_timeout_box.setRange(10, 600)
+        self.story_timeout_box.setValue(int(getattr(settings, "story_provider_timeout_seconds", 60)))
+        self.story_timeout_box.setSuffix(" sec")
+        form.addRow("Story Timeout", self.story_timeout_box)
+
+        self.gemini_free_tier_only_check = QCheckBox("Free-tier-only")
+        self.gemini_free_tier_only_check.setChecked(bool(getattr(settings, "gemini_free_tier_only", True)))
+        form.addRow("Gemini Free-tier-only", self.gemini_free_tier_only_check)
+
+        self.gemini_project_free_check = QCheckBox("Google AI StudioでProject TierがFreeであることを確認済み")
+        self.gemini_project_free_check.setChecked(bool(getattr(settings, "gemini_project_free_tier_confirmed", False)))
+        form.addRow("Gemini Project Tier確認", self.gemini_project_free_check)
+
+        self.gemini_billing_disabled_check = QCheckBox("このProjectでBillingを有効化していないことを確認済み")
+        self.gemini_billing_disabled_check.setChecked(bool(getattr(settings, "gemini_billing_disabled_confirmed", False)))
+        form.addRow("Gemini Billing確認", self.gemini_billing_disabled_check)
+
+        self.gemini_daily_cap_box = QSpinBox()
+        self.gemini_daily_cap_box.setRange(0, 1000)
+        self.gemini_daily_cap_box.setValue(int(getattr(settings, "gemini_local_daily_request_cap", 10)))
+        form.addRow("Gemini local daily cap", self.gemini_daily_cap_box)
+
+        self.gemini_temperature_box = QDoubleSpinBox()
+        self.gemini_temperature_box.setRange(0.0, 2.0)
+        self.gemini_temperature_box.setSingleStep(0.1)
+        self.gemini_temperature_box.setValue(float(getattr(settings, "gemini_temperature", 0.7)))
+        form.addRow("Gemini temperature", self.gemini_temperature_box)
+
         layout.addLayout(form)
 
         bgm_folder_button = QPushButton("BGMフォルダを開く")
@@ -312,6 +427,7 @@ class SettingsDialog(QDialog):
 
     def get_settings(self) -> AppSettings:
         genres = [line.strip() for line in self.genres_edit.toPlainText().splitlines() if line.strip()]
+        gemini_confirmation = self._gemini_confirmation_state()
         return AppSettings(
             default_duration=self.duration_box.currentText(),
             default_image_count=int(self.image_count_box.currentText()),
@@ -358,9 +474,78 @@ class SettingsDialog(QDialog):
             transition_type=self.transition_type_box.currentText(),
             overlay_opacity=self.overlay_opacity_box.value(),
             light_effect=self.light_effect_box.currentText(),
+            image_generation_provider=self.image_generation_provider_box.currentText(),
+            image_generation_model=self.image_generation_model_box.currentText(),
+            image_generation_steps=self.image_generation_steps_box.value(),
+            image_generation_max_images_per_run=self.image_generation_max_run_box.value(),
+            image_generation_max_retries_per_image=self.image_generation_retry_box.value(),
+            image_generation_daily_request_limit=self.image_generation_daily_limit_box.value(),
+            image_generation_project_limit=self.image_generation_project_limit_box.value(),
+            image_prompt_optimizer_enabled=self.image_prompt_optimizer_check.isChecked(),
+            default_story_provider=str(self.default_story_provider_box.currentData() or "gemini"),
+            default_story_model=self._selected_story_model(),
+            default_reasoning_effort=self.story_reasoning_box.currentText(),
+            default_max_output_tokens=self.story_max_output_box.value(),
+            story_provider_retry_count=self.story_retry_box.value(),
+            story_provider_timeout_seconds=self.story_timeout_box.value(),
+            default_gemini_model=self._selected_story_model() if self._selected_story_model().startswith("gemini-") else "gemini-3.5-flash-lite",
+            gemini_free_tier_only=self.gemini_free_tier_only_check.isChecked(),
+            gemini_project_free_tier_confirmed=self.gemini_project_free_check.isChecked(),
+            gemini_project_free_tier_confirmed_at=gemini_confirmation["project_confirmed_at"],
+            gemini_billing_disabled_confirmed=self.gemini_billing_disabled_check.isChecked(),
+            gemini_billing_disabled_confirmed_at=gemini_confirmation["billing_confirmed_at"],
+            gemini_confirmation_key_fingerprint=gemini_confirmation["fingerprint"],
+            gemini_confirmation_version=gemini_confirmation["version"],
+            gemini_local_daily_request_cap=self.gemini_daily_cap_box.value(),
+            gemini_retry_count=self.story_retry_box.value(),
+            gemini_timeout_seconds=self.story_timeout_box.value(),
+            gemini_temperature=self.gemini_temperature_box.value(),
+            gemini_max_output_tokens=self.story_max_output_box.value(),
             image_common_conditions=self.image_common_conditions_edit.toPlainText().strip()
             or "・9:16\n・4K\n・文字なし\n・リアル\n・映画風\n・ドキュメンタリー風",
         )
+
+    def _gemini_confirmation_state(self) -> dict[str, str]:
+        both_confirmed = self.gemini_project_free_check.isChecked() and self.gemini_billing_disabled_check.isChecked()
+        if not both_confirmed:
+            return {
+                "project_confirmed_at": "",
+                "billing_confirmed_at": "",
+                "fingerprint": "",
+                "version": "1.0",
+            }
+        fingerprint = self._current_gemini_key_fingerprint()
+        if not fingerprint:
+            return {
+                "project_confirmed_at": "",
+                "billing_confirmed_at": "",
+                "fingerprint": "",
+                "version": "1.0",
+            }
+        existing_fingerprint = str(getattr(self.settings, "gemini_confirmation_key_fingerprint", ""))
+        reuse_existing = existing_fingerprint == fingerprint
+        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        return {
+            "project_confirmed_at": str(getattr(self.settings, "gemini_project_free_tier_confirmed_at", "")) if reuse_existing else now,
+            "billing_confirmed_at": str(getattr(self.settings, "gemini_billing_disabled_confirmed_at", "")) if reuse_existing else now,
+            "fingerprint": fingerprint,
+            "version": "1.0",
+        }
+
+    def _current_gemini_key_fingerprint(self) -> str:
+        load_dotenv()
+        api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            return ""
+        return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+
+    def _selected_story_model(self) -> str:
+        if self.default_story_model_box.currentText() != "Custom":
+            return self.default_story_model_box.currentText()
+        custom = self.custom_story_model_edit.text().strip()
+        if not custom or len(custom) > 120 or any(ord(ch) < 32 for ch in custom):
+            return "gemini-3.5-flash-lite"
+        return custom
 
     def _select_save_dir(self) -> None:
         selected = QFileDialog.getExistingDirectory(self, "保存先を選択", self.save_dir_edit.text())

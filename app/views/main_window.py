@@ -6,7 +6,7 @@ import logging
 import re
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QTimer, QStringListModel, QUrl
+from PySide6.QtCore import QSignalBlocker, QSize, Qt, QTimer, QStringListModel, QUrl
 from PySide6.QtGui import QGuiApplication, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -90,6 +90,14 @@ QSplitter::handle:horizontal { min-width: 8px; margin: 0 2px; }
 """
 
 
+from PySide6.QtCore import QObject, QThread, Signal
+from views.story_composer_widget import StoryComposerWidget
+from views.production_orchestrator_widget import ProductionOrchestratorWidget
+from services.youtube.upload_service import YouTubeUploadWorker
+from services.tiktok.upload_service import TikTokConnectWorker, TikTokUploadWorker, TikTokStatusWorker
+from services.image_generation.models import ImageGenerationSettings
+from services.image_generation import ImageGenerationError, ImageGenerationWorker
+from services.story_provider import StoryProviderManager
 class ImageDropArea(QLabel):
     """画像ファイルを受け取るドラッグ＆ドロップ領域です。"""
 
@@ -128,22 +136,36 @@ class MainWindow(QMainWindow):
         paths: AppPaths,
         settings_service: SettingsService,
         project_service: ProjectService,
+        image_generation_service,
+        story_service,
+        job_service,
+        youtube_upload_service,
+        tiktok_oauth_service,
+        tiktok_upload_service,
         topic_service: TopicService,
         template_service: TemplateService,
         dashboard_service: DashboardService,
         video_render_service: VideoRenderService,
         voicevox_service: VoicevoxService,
+        production_orchestrator_service,
         version_info: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
         self.paths = paths
         self.settings_service = settings_service
         self.project_service = project_service
+        self.image_generation_service = image_generation_service
+        self.story_service = story_service
+        self.job_service = job_service
+        self.youtube_upload_service = youtube_upload_service
+        self.tiktok_oauth_service = tiktok_oauth_service
+        self.tiktok_upload_service = tiktok_upload_service
         self.topic_service = topic_service
         self.template_service = template_service
         self.dashboard_service = dashboard_service
         self.video_render_service = video_render_service
         self.voicevox_service = voicevox_service
+        self.production_orchestrator_service = production_orchestrator_service
         self.version_info = version_info or {}
         self.logger = logging.getLogger("ai_video_factory")
         self.parser = ChatGptAnswerParser()
@@ -175,6 +197,15 @@ class MainWindow(QMainWindow):
         self.auto_parse_timer.setSingleShot(True)
         self.auto_parse_timer.setInterval(500)
         self.auto_parse_timer.timeout.connect(self.auto_parse_answer)
+
+        self.youtube_upload_thread = None
+        self.youtube_upload_worker = None
+        self.youtube_upload_project_path = None
+        self.tiktok_thread = None
+        self.tiktok_worker = None
+        self.image_generation_thread = None
+        self.image_generation_worker = None
+        self.image_generation_project_path = None
 
         self.setWindowTitle("AI Video Factory")
         self.resize(1440, 900)
@@ -393,27 +424,24 @@ class MainWindow(QMainWindow):
         project_tab_layout.addWidget(self.left_content_splitter)
 
         left_tabs = QTabWidget()
-        left_tabs.addTab(project_tab, "プロジェクト")
-        left_tabs.addTab(topic_scroll, "ネタ")
-        left_tabs.addTab(self._splitter_scroll_area(classification_panel), "分類")
+        left_tabs.addTab(project_tab, "Projects")
+        left_tabs.addTab(topic_scroll, "Topics")
+        left_tabs.addTab(self._splitter_scroll_area(classification_panel), "Categories")
         layout.addWidget(left_tabs, stretch=1)
         return panel
-
     def _build_main_tabs(self) -> QTabWidget:
         self.main_tabs = QTabWidget()
-        self.main_tabs.addTab(self._scrollable_page(self._build_dashboard_tab()), "ホーム")
-        self.main_tabs.addTab(self._scrollable_page(self._build_wizard_tab()), "制作ウィザード")
-        self.main_tabs.addTab(self._build_compilation_tab(), "総集編")
+        self.main_tabs.addTab(self._scrollable_page(self._build_dashboard_tab()), "Home")
+        self.main_tabs.addTab(self._scrollable_page(self._build_wizard_tab()), "Production Wizard")
+        self.main_tabs.addTab(self._build_compilation_tab(), "Compilation")
         self.main_tabs.addTab(self._scrollable_page(self._build_analytics_tab()), "Analytics")
-        self.main_tabs.addTab(self._scrollable_page(self._build_ai_advisor_tab()), "AIアドバイザー")
+        self.main_tabs.addTab(self._scrollable_page(self._build_ai_advisor_tab()), "AI Advisor")
         return self.main_tabs
-
     def _scrollable_page(self, widget: QWidget) -> QScrollArea:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(widget)
         return scroll
-
     def _splitter_scroll_area(self, widget: QWidget) -> QScrollArea:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -421,7 +449,6 @@ class MainWindow(QMainWindow):
         scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         scroll.setWidget(widget)
         return scroll
-
     def _build_dashboard_tab(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -429,12 +456,12 @@ class MainWindow(QMainWindow):
         grid = QGridLayout(stats_box)
         self.dashboard_labels: dict[str, QLabel] = {}
         labels = [
-            ("today", "今日作る予定"),
-            ("progress", "制作中"),
-            ("completed", "完成"),
-            ("posted", "投稿済"),
-            ("videos", "総動画数"),
-            ("projects", "総プロジェクト数"),
+            ("today", "Today"),
+            ("progress", "In Progress"),
+            ("completed", "Completed"),
+            ("posted", "Posted"),
+            ("videos", "Total Videos"),
+            ("projects", "Total Projects"),
         ]
         for index, (key, label) in enumerate(labels):
             caption = QLabel(label)
@@ -444,35 +471,33 @@ class MainWindow(QMainWindow):
             grid.addWidget(caption, index // 3 * 2, index % 3)
             grid.addWidget(value, index // 3 * 2 + 1, index % 3)
         layout.addWidget(stats_box)
-
-        analytics_box = QGroupBox("Analyticsサマリー")
+        analytics_box = QGroupBox("Analytics Summary")
         analytics_grid = QGridLayout(analytics_box)
         self.dashboard_analytics_labels: dict[str, QLabel] = {}
         analytics_items = [
-            ("youtube_views", "YouTube総再生数"),
-            ("tiktok_views", "TikTok総再生数"),
-            ("best_week", "今週の最高成績動画"),
-            ("unlinked", "未紐付け動画数"),
-            ("csv_posted", "投稿確認済み"),
-            ("improvement", "改善候補動画数"),
-            ("continuation", "続編推奨動画数"),
+            ("youtube_views", "YouTube Views"),
+            ("tiktok_views", "TikTok Views"),
+            ("best_week", "Best This Week"),
+            ("unlinked", "Unlinked Videos"),
+            ("csv_posted", "CSV Posted"),
+            ("improvement", "Needs Improvement"),
+            ("continuation", "Continuation Ideas"),
         ]
         for index, (key, label) in enumerate(analytics_items):
             caption = QLabel(label)
-            value = QLabel("CSV未取込")
+            value = QLabel("CSV not imported")
             value.setStyleSheet("font-size: 16px; font-weight: 700; color: #ce9178;")
             self.dashboard_analytics_labels[key] = value
             analytics_grid.addWidget(caption, index // 3 * 2, index % 3)
             analytics_grid.addWidget(value, index // 3 * 2 + 1, index % 3)
         layout.addWidget(analytics_box)
-
         lists = QHBoxLayout()
-        genre_box = QGroupBox("ジャンル別本数")
+        genre_box = QGroupBox("Projects by Genre")
         genre_layout = QVBoxLayout(genre_box)
         self.genre_stats_list = QListWidget()
         genre_layout.addWidget(self.genre_stats_list)
         lists.addWidget(genre_box)
-        recent_box = QGroupBox("最近編集した動画")
+        recent_box = QGroupBox("Recently Edited Videos")
         recent_layout = QVBoxLayout(recent_box)
         self.recent_list = QListWidget()
         self.recent_list.itemDoubleClicked.connect(self.open_recent_project)
@@ -480,26 +505,26 @@ class MainWindow(QMainWindow):
         lists.addWidget(recent_box)
         layout.addLayout(lists, stretch=1)
         return panel
-
     def _build_wizard_tab(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.addWidget(self._build_wizard_bar())
-        self.next_action_label = QLabel("次に押す場所を青くハイライトします。")
+        self.next_action_label = QLabel("Select the next production action.")
         self.next_action_label.setStyleSheet("background:#252526; border:1px solid #3c3c3c; border-radius:4px; padding:8px; color:#dcdcaa;")
         layout.addWidget(self.next_action_label)
         layout.addWidget(self._build_form_box())
-
+        layout.addWidget(self._build_youtube_upload_box())
+        layout.addWidget(self._build_tiktok_upload_box())
         action_row = QHBoxLayout()
         buttons = [
-            ("open_chatgpt", "ChatGPTを開く", self.open_chatgpt),
-            ("generate_prompt", "プロンプト生成", self.generate_prompt),
-            ("copy_prompt", "プロンプトをコピー", self.copy_prompt),
-            ("copy_bulk_image_prompt", "画像生成プロンプトをコピー", self.copy_bulk_image_prompt),
-            ("create_project", "プロジェクト作成", self.create_project),
-            ("generate_voice", "VOICEVOX音声生成", self.generate_voice),
-            ("render_video", "FFmpeg動画生成", self.render_video),
-            ("post", "投稿", self.not_implemented),
+            ("open_chatgpt", "Open ChatGPT", self.open_chatgpt),
+            ("generate_prompt", "Generate Prompt", self.generate_prompt),
+            ("copy_prompt", "Copy Prompt", self.copy_prompt),
+            ("copy_bulk_image_prompt", "Copy Image Prompt", self.copy_bulk_image_prompt),
+            ("create_project", "Create Project", self.create_project),
+            ("generate_voice", "Generate VOICEVOX Audio", self.generate_voice),
+            ("render_video", "Generate FFmpeg Video", self.render_video),
+            ("post", "Upload", self.upload_to_youtube),
         ]
         self.action_buttons: dict[str, QPushButton] = {}
         for key, label, handler in buttons:
@@ -509,29 +534,32 @@ class MainWindow(QMainWindow):
             action_row.addWidget(button)
         action_row.addStretch()
         layout.addLayout(action_row)
-
         self.content_tabs = QTabWidget()
         self.prompt_text = QTextEdit()
-        self.prompt_text.setPlaceholderText("JSON出力指定のChatGPT用プロンプトが表示されます。")
+        self.prompt_text.setPlaceholderText("Prompt for ChatGPT is shown here.")
         self.answer_text = QTextEdit()
-        self.answer_text.setPlaceholderText("ChatGPTのJSON回答を貼り付けると0.5秒後に自動解析します。旧形式にも対応しています。")
+        self.answer_text.setPlaceholderText("Paste the ChatGPT JSON response here.")
         self.answer_text.textChanged.connect(self.schedule_auto_parse)
         self.content_tabs.addTab(self.prompt_text, "ChatGPT")
-        self.content_tabs.addTab(self.answer_text, "JSON回答貼り付け")
-        self.content_tabs.addTab(self._build_preview_tab(), "プレビュー編集")
-        self.content_tabs.addTab(self._build_image_prompts_tab(), "画像プロンプト")
-        self.content_tabs.addTab(self._build_bulk_image_prompt_tab(), "一括画像生成")
-        self.content_tabs.addTab(self._build_assets_tab(), "素材管理")
-        self.content_tabs.addTab(self._build_project_analytics_tab(), "個別分析")
-        self.content_tabs.addTab(self._build_video_preview_tab(), "完成動画プレビュー")
+        self.content_tabs.addTab(self.answer_text, "Paste JSON Response")
+        self.story_composer_widget = StoryComposerWidget(self.project_service, self.story_service, self.settings, self)
+        self.story_composer_widget.exported.connect(self.on_story_exported)
+        self.content_tabs.addTab(self.story_composer_widget, "Story Composer")
+        self.production_orchestrator_widget = ProductionOrchestratorWidget(self.production_orchestrator_service, self)
+        self.production_orchestrator_widget.run_updated.connect(self.on_production_run_updated)
+        self.content_tabs.addTab(self.production_orchestrator_widget, "Automated Production")
+        self.content_tabs.addTab(self._build_preview_tab(), "Preview Edit")
+        self.content_tabs.addTab(self._build_image_prompts_tab(), "Image Prompts")
+        self.content_tabs.addTab(self._build_bulk_image_prompt_tab(), "Bulk Image Generation")
+        self.content_tabs.addTab(self._build_assets_tab(), "Assets")
+        self.content_tabs.addTab(self._build_project_analytics_tab(), "Project Analytics")
+        self.content_tabs.addTab(self._build_video_preview_tab(), "Final Video Preview")
         layout.addWidget(self.content_tabs, stretch=2)
-
         bottom = QHBoxLayout()
         bottom.addWidget(self._build_progress_box(), stretch=1)
         bottom.addWidget(self._build_folder_box(), stretch=1)
         layout.addLayout(bottom)
-
-        self.status_label = QLabel("準備完了")
+        self.status_label = QLabel("Ready")
         self.status_label.setStyleSheet("color: #9cdcfe;")
         footer = QHBoxLayout()
         footer.addWidget(self.status_label)
@@ -542,9 +570,8 @@ class MainWindow(QMainWindow):
         footer.addWidget(self.version_label)
         layout.addLayout(footer)
         return panel
-
     def _build_wizard_bar(self) -> QWidget:
-        box = QGroupBox("制作ウィザード")
+        box = QGroupBox("Production Wizard")
         layout = QHBoxLayout(box)
         self.step_labels: list[QLabel] = []
         for index, step in enumerate(WIZARD_STEPS, start=1):
@@ -554,16 +581,14 @@ class MainWindow(QMainWindow):
             self.step_labels.append(label)
             layout.addWidget(label)
         return box
-
     def _build_form_box(self) -> QGroupBox:
-        box = QGroupBox("制作設定")
+        box = QGroupBox("Production Settings")
         form = QGridLayout(box)
         self.topic_input = QLineEdit()
         self.topic_completer_model = QStringListModel()
         self.topic_completer = QCompleter(self.topic_completer_model, self)
         self.topic_completer.setCaseSensitivity(Qt.CaseInsensitive)
         self.topic_input.setCompleter(self.topic_completer)
-
         self.template_box = QComboBox()
         self.template_box.currentTextChanged.connect(self.apply_template)
         self.duration_box = QComboBox()
@@ -576,43 +601,42 @@ class MainWindow(QMainWindow):
         if self.category_box.lineEdit():
             self.category_box.lineEdit().editingFinished.connect(self.save_current_project_classification)
         self.series_input = QLineEdit()
-        self.series_input.setPlaceholderText("例: ブラックホール基礎")
+        self.series_input.setPlaceholderText("Example: Black Hole Series")
         self.series_input.editingFinished.connect(self.save_current_project_classification)
         self.image_count_box = QComboBox()
         self.image_count_box.addItems(["3", "4", "5", "6", "8"])
         self.youtube_tags_input = QLineEdit()
-        self.youtube_tags_input.setPlaceholderText("hashtags.txtから#を削除し、カンマ区切りで入力します")
+        self.youtube_tags_input.setPlaceholderText("YouTube tags from hashtags.txt, comma separated")
         self.tiktok_tags_input = QLineEdit()
-        self.tiktok_tags_input.setPlaceholderText("hashtags.txtをコピーし、最後に#VOICEVOXを追加します")
-
-        form.addWidget(QLabel("テーマ"), 0, 0)
+        self.tiktok_tags_input.setPlaceholderText("TikTok tags from hashtags.txt, e.g. #Shorts #VOICEVOX")
+        form.addWidget(QLabel("Theme"), 0, 0)
         form.addWidget(self.topic_input, 0, 1, 1, 3)
-        copy_topic_button = QPushButton("テーマコピー")
+        copy_topic_button = QPushButton("Copy Theme")
         topic_buttons = QHBoxLayout()
-        save_topic_button = QPushButton("テーマ保存")
+        save_topic_button = QPushButton("Save Theme")
         save_topic_button.clicked.connect(self.save_topic_name)
         copy_topic_button.clicked.connect(self.copy_theme_to_clipboard)
         topic_buttons.addWidget(save_topic_button)
         topic_buttons.addWidget(copy_topic_button)
         form.addLayout(topic_buttons, 0, 4, 1, 2)
-        form.addWidget(QLabel("テンプレート"), 1, 0)
+        form.addWidget(QLabel("Duration"), 1, 0)
         form.addWidget(self.template_box, 1, 1)
         form.addWidget(QLabel("動画時間"), 1, 2)
         form.addWidget(self.duration_box, 1, 3)
-        form.addWidget(QLabel("画像枚数"), 1, 4)
+        form.addWidget(QLabel("Image Count"), 1, 4)
         form.addWidget(self.image_count_box, 1, 5)
         form.addWidget(QLabel("ジャンル"), 2, 0)
         form.addWidget(self.genre_box, 2, 1)
-        form.addWidget(QLabel("カテゴリ"), 2, 2)
+        form.addWidget(QLabel("Category"), 2, 2)
         form.addWidget(self.category_box, 2, 3)
         form.addWidget(QLabel("シリーズ"), 2, 4)
         form.addWidget(self.series_input, 2, 5)
         form.addWidget(QLabel("YouTubeタグ"), 3, 0)
         form.addWidget(self.youtube_tags_input, 3, 1, 1, 3)
         youtube_buttons = QHBoxLayout()
-        save_youtube_tags_button = QPushButton("youtubeタグ保存")
+        save_youtube_tags_button = QPushButton("Save YouTube Tags")
         save_youtube_tags_button.clicked.connect(self.save_youtube_tags)
-        copy_youtube_tags_button = QPushButton("コピー")
+        copy_youtube_tags_button = QPushButton("Copy")
         copy_youtube_tags_button.clicked.connect(self.copy_youtube_tags_to_clipboard)
         youtube_buttons.addWidget(save_youtube_tags_button)
         youtube_buttons.addWidget(copy_youtube_tags_button)
@@ -620,15 +644,96 @@ class MainWindow(QMainWindow):
         form.addWidget(QLabel("TikTokタグ"), 4, 0)
         form.addWidget(self.tiktok_tags_input, 4, 1, 1, 3)
         tiktok_buttons = QHBoxLayout()
-        save_tiktok_tags_button = QPushButton("tiktokタグ保存")
+        save_tiktok_tags_button = QPushButton("Save TikTok Tags")
         save_tiktok_tags_button.clicked.connect(self.save_tiktok_tags)
-        copy_tiktok_tags_button = QPushButton("コピー")
+        copy_tiktok_tags_button = QPushButton("Copy")
         copy_tiktok_tags_button.clicked.connect(self.copy_tiktok_tags_to_clipboard)
         tiktok_buttons.addWidget(save_tiktok_tags_button)
         tiktok_buttons.addWidget(copy_tiktok_tags_button)
         form.addLayout(tiktok_buttons, 4, 4, 1, 2)
         return box
+    def _build_youtube_upload_box(self) -> QGroupBox:
+        box = QGroupBox("YouTube Upload")
+        layout = QGridLayout(box)
+        self.job_status_label = QLabel("-")
+        self.youtube_upload_status_label = QLabel("pending")
+        self.youtube_upload_video_id_label = QLabel("-")
+        self.youtube_upload_time_label = QLabel("-")
+        self.youtube_upload_progress_label = QLabel("-")
+        
+        self.youtube_upload_button = QPushButton("Upload")
+        self.youtube_upload_button.clicked.connect(self.upload_to_youtube)
+        self.youtube_retry_button = QPushButton("Retry")
+        self.youtube_retry_button.clicked.connect(self.retry_youtube_upload)
+        self.youtube_open_button = QPushButton("Open Video")
+        self.youtube_open_button.clicked.connect(self.open_youtube_upload_url)
+        
+        layout.addWidget(QLabel("Job Status:"), 0, 0)
+        layout.addWidget(self.job_status_label, 0, 1)
+        layout.addWidget(QLabel("Upload Status:"), 1, 0)
+        layout.addWidget(self.youtube_upload_status_label, 1, 1)
+        layout.addWidget(QLabel("Video ID:"), 2, 0)
+        layout.addWidget(self.youtube_upload_video_id_label, 2, 1)
+        layout.addWidget(QLabel("Upload Time:"), 3, 0)
+        layout.addWidget(self.youtube_upload_time_label, 3, 1)
+        layout.addWidget(QLabel("Progress/Error:"), 4, 0)
+        layout.addWidget(self.youtube_upload_progress_label, 4, 1)
+        
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.youtube_upload_button)
+        buttons.addWidget(self.youtube_retry_button)
+        buttons.addWidget(self.youtube_open_button)
+        layout.addLayout(buttons, 5, 0, 1, 2)
+        return box
 
+    def _build_tiktok_upload_box(self) -> QGroupBox:
+        box = QGroupBox("TikTok Upload")
+        layout = QGridLayout(box)
+        self.tiktok_connection_label = QLabel("not connected")
+        self.tiktok_upload_status_label = QLabel("pending")
+        self.tiktok_remote_status_label = QLabel("-")
+        self.tiktok_publish_id_label = QLabel("-")
+        self.tiktok_upload_time_label = QLabel("-")
+        self.tiktok_check_time_label = QLabel("-")
+        self.tiktok_progress_label = QLabel("-")
+        self.tiktok_action_label = QLabel("-")
+        
+        self.tiktok_connect_button = QPushButton("Connect")
+        self.tiktok_connect_button.clicked.connect(self.connect_tiktok)
+        self.tiktok_disconnect_button = QPushButton("Disconnect")
+        self.tiktok_disconnect_button.clicked.connect(self.disconnect_tiktok)
+        self.tiktok_upload_button = QPushButton("Upload")
+        self.tiktok_upload_button.clicked.connect(self.upload_to_tiktok)
+        self.tiktok_retry_button = QPushButton("Retry")
+        self.tiktok_retry_button.clicked.connect(self.retry_tiktok_upload)
+        self.tiktok_check_button = QPushButton("Check Status")
+        self.tiktok_check_button.clicked.connect(self.check_tiktok_status)
+        
+        layout.addWidget(QLabel("Connection:"), 0, 0)
+        layout.addWidget(self.tiktok_connection_label, 0, 1)
+        layout.addWidget(QLabel("Upload Status:"), 1, 0)
+        layout.addWidget(self.tiktok_upload_status_label, 1, 1)
+        layout.addWidget(QLabel("Remote Status:"), 2, 0)
+        layout.addWidget(self.tiktok_remote_status_label, 2, 1)
+        layout.addWidget(QLabel("Publish ID:"), 3, 0)
+        layout.addWidget(self.tiktok_publish_id_label, 3, 1)
+        layout.addWidget(QLabel("Upload Time:"), 4, 0)
+        layout.addWidget(self.tiktok_upload_time_label, 4, 1)
+        layout.addWidget(QLabel("Check Time:"), 5, 0)
+        layout.addWidget(self.tiktok_check_time_label, 5, 1)
+        layout.addWidget(QLabel("Progress/Error:"), 6, 0)
+        layout.addWidget(self.tiktok_progress_label, 6, 1)
+        layout.addWidget(QLabel("Action Required:"), 7, 0)
+        layout.addWidget(self.tiktok_action_label, 7, 1)
+        
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.tiktok_connect_button)
+        buttons.addWidget(self.tiktok_disconnect_button)
+        buttons.addWidget(self.tiktok_upload_button)
+        buttons.addWidget(self.tiktok_retry_button)
+        buttons.addWidget(self.tiktok_check_button)
+        layout.addLayout(buttons, 8, 0, 1, 2)
+        return box
     def _build_preview_tab(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -644,11 +749,10 @@ class MainWindow(QMainWindow):
         self.preview_tabs.addTab(self.preview_subtitles, "subtitles.txt")
         self.preview_tabs.addTab(self.preview_hashtags, "hashtags.txt")
         layout.addWidget(self.preview_tabs)
-        save_button = QPushButton("プレビュー内容を保存")
+        save_button = QPushButton("Save Preview Files")
         save_button.clicked.connect(self.save_preview_files)
         layout.addWidget(save_button)
         return panel
-
     def _build_image_prompts_tab(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -665,47 +769,44 @@ class MainWindow(QMainWindow):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         self.bulk_image_prompt_text = QTextEdit()
-        self.bulk_image_prompt_text.setPlaceholderText("画像生成プロンプトのプレビューが表示されます。編集してからコピーできます。")
+        self.bulk_image_prompt_text.setPlaceholderText("Bulk image generation prompt appears here.")
         layout.addWidget(self.bulk_image_prompt_text, stretch=1)
-
         buttons = QHBoxLayout()
-        refresh_button = QPushButton("画像生成プロンプトを作成")
+        refresh_button = QPushButton("Generate Image Prompt")
         refresh_button.clicked.connect(self.refresh_bulk_image_prompt)
-        copy_button = QPushButton("画像生成プロンプトをコピー")
+        copy_button = QPushButton("Copy Image Prompt")
         copy_button.clicked.connect(self.copy_bulk_image_prompt)
         buttons.addWidget(refresh_button)
         buttons.addWidget(copy_button)
         buttons.addStretch()
         layout.addLayout(buttons)
         return panel
-
     def _build_assets_tab(self) -> QWidget:
         panel = QWidget()
         self.assets_tab = panel
         layout = QVBoxLayout(panel)
+        layout.addWidget(self._build_image_generation_box())
         self.image_drop_area = ImageDropArea(self)
         layout.addWidget(self.image_drop_area)
-
         import_buttons = QHBoxLayout()
-        self.select_images_button = QPushButton("画像ファイルを選択")
+        self.select_images_button = QPushButton("Import Images")
         self.select_images_button.clicked.connect(self.select_images_for_import)
         self.paste_images_button = QPushButton("Ctrl+V貼り付け")
         self.paste_images_button.clicked.connect(self.paste_images_from_clipboard)
-        open_images_button = QPushButton("画像フォルダを開く")
+        open_images_button = QPushButton("Open Images Folder")
         open_images_button.clicked.connect(lambda _checked=False: self.open_project_folder("images"))
         import_buttons.addWidget(self.select_images_button)
         import_buttons.addWidget(self.paste_images_button)
         import_buttons.addWidget(open_images_button)
         import_buttons.addStretch()
         layout.addLayout(import_buttons)
-
         imported_images_panel = QWidget()
         imported_images_panel.setMinimumHeight(80)
         imported_images_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         imported_images_layout = QVBoxLayout(imported_images_panel)
         imported_images_layout.setContentsMargins(0, 0, 0, 0)
         imported_images_header = QHBoxLayout()
-        imported_images_header.addWidget(QLabel("取り込み済み画像"))
+        imported_images_header.addWidget(QLabel("Imported Images"))
         imported_images_header.addStretch()
         imported_images_header.addWidget(QLabel("高さ"))
         self.image_thumbnail_height_box = QSpinBox()
@@ -725,19 +826,17 @@ class MainWindow(QMainWindow):
         self.image_thumbnail_layout.addStretch()
         self.image_thumbnail_scroll.setWidget(self.image_thumbnail_container)
         imported_images_layout.addWidget(self.image_thumbnail_scroll)
-
         asset_list_panel = QWidget()
         asset_list_panel.setMinimumHeight(80)
         asset_list_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         asset_list_layout = QVBoxLayout(asset_list_panel)
         asset_list_layout.setContentsMargins(0, 0, 0, 0)
-        asset_list_layout.addWidget(QLabel("素材一覧"))
+        asset_list_layout.addWidget(QLabel("Assets"))
         self.asset_list = QListWidget()
         self.asset_list.itemDoubleClicked.connect(self.open_asset_folder)
         self.asset_list.setMinimumHeight(60)
         self.asset_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         asset_list_layout.addWidget(self.asset_list)
-
         self.assets_splitter = QSplitter(Qt.Vertical)
         self.assets_splitter.setHandleWidth(8)
         self.assets_splitter.setChildrenCollapsible(False)
@@ -747,16 +846,125 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.assets_splitter, stretch=1)
         self.set_image_thumbnail_area_height(self.image_thumbnail_height_box.value())
         return panel
-
+    def _build_image_generation_box(self) -> QGroupBox:
+        box = QGroupBox("AI Image Generation")
+        layout = QGridLayout(box)
+        self.image_generation_provider_label = QLabel("Cloudflare Workers AI")
+        self.image_generation_config_label = QLabel("Not configured")
+        self.image_generation_model_label = QLabel("-")
+        self.image_generation_steps_label = QLabel("-")
+        self.image_generation_counts_label = QLabel("-")
+        self.image_generation_current_label = QLabel("-")
+        self.image_generation_status_label = QLabel("pending")
+        self.image_generation_usage_label = QLabel("-")
+        self.image_generation_error_label = QLabel("-")
+        self.image_generation_portrait_label = QLabel("Portrait: flux-1-schnell does not guarantee exact 9:16; renderer crop/fit is used.")
+        self.image_generation_error_label.setWordWrap(True)
+        self.image_generation_portrait_label.setWordWrap(True)
+        self.prompt_optimizer_check = QCheckBox("Prompt Optimizer ON")
+        self.prompt_optimizer_check.setChecked(bool(getattr(self.settings, "image_prompt_optimizer_enabled", True)))
+        self.prompt_optimizer_check.toggled.connect(self.update_image_generation_prompt_preview)
+        self.prompt_template_mode_box = QComboBox()
+        self.prompt_template_mode_box.addItems(["Auto", "Manual"])
+        self.prompt_template_mode_box.currentTextChanged.connect(self.on_prompt_template_changed)
+        self.prompt_template_box = QComboBox()
+        self.prompt_template_box.currentTextChanged.connect(self.on_prompt_template_changed)
+        self.prompt_template_resolved_label = QLabel("-")
+        self.prompt_template_version_label = QLabel("-")
+        self.prompt_template_keywords_label = QLabel("-")
+        self.prompt_template_sources_label = QLabel("-")
+        self.prompt_template_scene_label = QLabel("-")
+        self.prompt_template_warnings_label = QLabel("-")
+        self.prompt_template_warnings_label.setWordWrap(True)
+        self.prompt_scene_box = QSpinBox()
+        self.prompt_scene_box.setRange(1, 8)
+        self.prompt_scene_box.valueChanged.connect(self.update_image_generation_prompt_preview)
+        self.prompt_original_edit = QTextEdit()
+        self.prompt_original_edit.setReadOnly(True)
+        self.prompt_original_edit.setFixedHeight(70)
+        self.prompt_optimized_edit = QTextEdit()
+        self.prompt_optimized_edit.setReadOnly(True)
+        self.prompt_optimized_edit.setFixedHeight(90)
+        self.prompt_rules_label = QLabel("-")
+        self.prompt_rules_label.setWordWrap(True)
+        self.prompt_length_label = QLabel("-")
+        layout.addWidget(QLabel("Provider"), 0, 0)
+        layout.addWidget(self.image_generation_provider_label, 0, 1)
+        layout.addWidget(QLabel("API"), 0, 2)
+        layout.addWidget(self.image_generation_config_label, 0, 3)
+        layout.addWidget(QLabel("Model"), 1, 0)
+        layout.addWidget(self.image_generation_model_label, 1, 1)
+        layout.addWidget(QLabel("Steps"), 1, 2)
+        layout.addWidget(self.image_generation_steps_label, 1, 3)
+        layout.addWidget(QLabel("Images"), 2, 0)
+        layout.addWidget(self.image_generation_counts_label, 2, 1)
+        layout.addWidget(QLabel("Current"), 2, 2)
+        layout.addWidget(self.image_generation_current_label, 2, 3)
+        layout.addWidget(QLabel("Status"), 3, 0)
+        layout.addWidget(self.image_generation_status_label, 3, 1)
+        layout.addWidget(QLabel("Usage"), 3, 2)
+        layout.addWidget(self.image_generation_usage_label, 3, 3)
+        layout.addWidget(QLabel("Last error"), 4, 0)
+        layout.addWidget(self.image_generation_error_label, 4, 1, 1, 3)
+        layout.addWidget(self.image_generation_portrait_label, 5, 0, 1, 4)
+        layout.addWidget(self.prompt_optimizer_check, 6, 0)
+        layout.addWidget(QLabel("Template Mode"), 6, 1)
+        layout.addWidget(self.prompt_template_mode_box, 6, 2)
+        reload_templates_button = QPushButton("Reload Templates")
+        reload_templates_button.clicked.connect(self.reload_prompt_templates)
+        layout.addWidget(reload_templates_button, 6, 3)
+        layout.addWidget(QLabel("Manual Template"), 7, 0)
+        layout.addWidget(self.prompt_template_box, 7, 1)
+        layout.addWidget(QLabel("Resolved"), 7, 2)
+        layout.addWidget(self.prompt_template_resolved_label, 7, 3)
+        layout.addWidget(QLabel("Version"), 8, 0)
+        layout.addWidget(self.prompt_template_version_label, 8, 1)
+        layout.addWidget(QLabel("Detected Keywords"), 8, 2)
+        layout.addWidget(self.prompt_template_keywords_label, 8, 3)
+        layout.addWidget(QLabel("Match Sources"), 9, 0)
+        layout.addWidget(self.prompt_template_sources_label, 9, 1)
+        layout.addWidget(QLabel("Selected Scene"), 9, 2)
+        layout.addWidget(self.prompt_template_scene_label, 9, 3)
+        layout.addWidget(QLabel("Template Warnings"), 10, 0)
+        layout.addWidget(self.prompt_template_warnings_label, 10, 1, 1, 3)
+        layout.addWidget(QLabel("Scene"), 11, 0)
+        layout.addWidget(self.prompt_scene_box, 11, 1)
+        refresh_prompt_button = QPushButton("Refresh Preview")
+        refresh_prompt_button.clicked.connect(self.update_image_generation_prompt_preview)
+        layout.addWidget(refresh_prompt_button, 11, 3)
+        layout.addWidget(QLabel("Original Prompt"), 12, 0)
+        layout.addWidget(self.prompt_original_edit, 12, 1, 1, 3)
+        layout.addWidget(QLabel("Optimized Prompt"), 13, 0)
+        layout.addWidget(self.prompt_optimized_edit, 13, 1, 1, 3)
+        layout.addWidget(QLabel("Applied / Skipped"), 14, 0)
+        layout.addWidget(self.prompt_rules_label, 14, 1, 1, 3)
+        layout.addWidget(QLabel("Prompt Length"), 15, 0)
+        layout.addWidget(self.prompt_length_label, 15, 1, 1, 2)
+        copy_prompt_button = QPushButton("Copy Optimized Prompt")
+        copy_prompt_button.clicked.connect(self.copy_optimized_prompt)
+        layout.addWidget(copy_prompt_button, 15, 3)
+        self.generate_missing_images_button = QPushButton("Generate Missing Images")
+        self.generate_missing_images_button.clicked.connect(self.generate_missing_images)
+        self.retry_failed_images_button = QPushButton("Retry Failed Images")
+        self.retry_failed_images_button.clicked.connect(self.retry_failed_images)
+        self.cancel_image_generation_button = QPushButton("Cancel")
+        self.cancel_image_generation_button.clicked.connect(self.cancel_image_generation)
+        open_button = QPushButton("Open Images Folder")
+        open_button.clicked.connect(lambda _checked=False: self.open_project_folder("images"))
+        layout.addWidget(self.generate_missing_images_button, 16, 0)
+        layout.addWidget(self.retry_failed_images_button, 16, 1)
+        layout.addWidget(self.cancel_image_generation_button, 16, 2)
+        layout.addWidget(open_button, 16, 3)
+        return box
     def _build_project_analytics_tab(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
         action_row = QHBoxLayout()
-        refresh_button = QPushButton("個別分析を更新")
+        refresh_button = QPushButton("Refresh Project Analytics")
         refresh_button.clicked.connect(self.refresh_project_analytics_view)
-        youtube_button = QPushButton("YouTube URLを開く")
+        youtube_button = QPushButton("Open YouTube URL")
         youtube_button.clicked.connect(lambda _checked=False: self.open_project_analytics_url("YouTube"))
-        tiktok_button = QPushButton("TikTok URLを開く")
+        tiktok_button = QPushButton("TikTok URL")
         tiktok_button.clicked.connect(lambda _checked=False: self.open_project_analytics_url("TikTok"))
         action_row.addWidget(refresh_button)
         action_row.addWidget(youtube_button)
@@ -765,10 +973,9 @@ class MainWindow(QMainWindow):
         layout.addLayout(action_row)
         self.project_analytics_text = QTextEdit()
         self.project_analytics_text.setReadOnly(True)
-        self.project_analytics_text.setPlaceholderText("CSVを読み込むと、このプロジェクトの個別成績と改善案が表示されます。")
+        self.project_analytics_text.setPlaceholderText("Import CSV analytics to show project performance.")
         layout.addWidget(self.project_analytics_text, stretch=1)
         return panel
-
     def _build_video_preview_tab(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -780,27 +987,29 @@ class MainWindow(QMainWindow):
             self.media_player.setVideoOutput(self.video_widget)
             layout.addWidget(self.video_widget, stretch=1)
         else:
-            layout.addWidget(QLabel("この環境ではQt Multimediaを利用できません。動画フォルダを開いて確認してください。"))
-
+            layout.addWidget(QLabel("Qt Multimedia is not available. Video preview cannot be shown."))
         controls = QHBoxLayout()
-        for label, handler in [("再生", self.play_video), ("一時停止", self.pause_video), ("最初に戻る", self.rewind_video), ("動画フォルダを開く", lambda: self.open_project_folder("video"))]:
+        for label, handler in [
+            ("??", self.play_video),
+            ("Pause", self.pause_video),
+            ("Rewind", self.rewind_video),
+            ("Open Video Folder", lambda: self.open_project_folder("video")),
+        ]:
             button = QPushButton(label)
             button.clicked.connect(handler)
             controls.addWidget(button)
         controls.addStretch()
         layout.addLayout(controls)
         return panel
-
     def _build_compilation_tab(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
-
         top_row = QHBoxLayout()
         top_row.addWidget(QLabel("ジャンル"))
         self.compilation_genre_box = QComboBox()
         self.compilation_genre_box.currentTextChanged.connect(self.on_compilation_genre_changed)
         top_row.addWidget(self.compilation_genre_box, stretch=1)
-        top_row.addWidget(QLabel("カテゴリ"))
+        top_row.addWidget(QLabel("Category"))
         self.compilation_category_box = QComboBox()
         self.compilation_category_box.currentTextChanged.connect(self.refresh_compilation_project_list)
         top_row.addWidget(self.compilation_category_box, stretch=1)
@@ -808,13 +1017,10 @@ class MainWindow(QMainWindow):
         refresh_button.clicked.connect(self.refresh_compilation_genres)
         top_row.addWidget(refresh_button)
         layout.addLayout(top_row)
-
         self.compilation_summary_label = QLabel("ジャンル: - / 動画本数: 0 / 総時間: 00:00")
         layout.addWidget(self.compilation_summary_label)
-
         self.compilation_project_list = QListWidget()
         layout.addWidget(self.compilation_project_list, stretch=1)
-
         order_buttons = QHBoxLayout()
         up_button = QPushButton("上へ")
         up_button.clicked.connect(lambda _checked=False: self.move_compilation_item(-1))
@@ -824,22 +1030,19 @@ class MainWindow(QMainWindow):
         order_buttons.addWidget(down_button)
         order_buttons.addStretch()
         layout.addLayout(order_buttons)
-
-        create_button = QPushButton("総集編を作成")
+        create_button = QPushButton("Create Compilation")
         create_button.clicked.connect(self.create_compilation_video)
         layout.addWidget(create_button)
         return panel
-
     def _build_analytics_tab(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
-
         action_row = QHBoxLayout()
-        import_button = QPushButton("CSVを読み込む")
+        import_button = QPushButton("Import CSV")
         import_button.clicked.connect(self.import_analytics_csv)
-        import_folder_button = QPushButton("CSVフォルダを読み込む")
+        import_folder_button = QPushButton("Import CSV Folder")
         import_folder_button.clicked.connect(self.import_analytics_folder)
-        export_button = QPushButton("分析結果CSV保存")
+        export_button = QPushButton("Export CSV")
         export_button.clicked.connect(self.export_analytics_csv)
         refresh_button = QPushButton("再表示")
         refresh_button.clicked.connect(self.refresh_analytics_view)
@@ -849,20 +1052,19 @@ class MainWindow(QMainWindow):
         action_row.addWidget(refresh_button)
         action_row.addStretch()
         layout.addLayout(action_row)
-
-        summary_box = QGroupBox("集計")
+        summary_box = QGroupBox("??")
         summary_grid = QGridLayout(summary_box)
         self.analytics_summary_labels: dict[str, QLabel] = {}
         summary_items = [
             ("total_videos", "総動画数"),
-            ("total_views", "総再生数"),
-            ("average_views", "平均再生数"),
-            ("max_views", "最高再生数"),
-            ("min_views", "最低再生数"),
-            ("total_likes", "総いいね"),
-            ("total_comments", "総コメント"),
-            ("average_like_rate", "平均いいね率"),
-            ("average_comment_rate", "平均コメント率"),
+            ("total_views", "Views"),
+            ("average_views", "Average Views"),
+            ("max_views", "Max Views"),
+            ("min_views", "Min Views"),
+            ("total_likes", "Likes"),
+            ("total_comments", "Comments"),
+            ("average_like_rate", "Like Rate"),
+            ("average_comment_rate", "Comment Rate"),
         ]
         for index, (key, label) in enumerate(summary_items):
             caption = QLabel(label)
@@ -872,14 +1074,13 @@ class MainWindow(QMainWindow):
             summary_grid.addWidget(caption, index // 3 * 2, index % 3)
             summary_grid.addWidget(value, index // 3 * 2 + 1, index % 3)
         layout.addWidget(summary_box)
-
         link_box = QGroupBox("Project Analytics")
         link_grid = QGridLayout(link_box)
         self.analytics_link_labels: dict[str, QLabel] = {}
         link_items = [
             ("linked", "紐付け済み動画数"),
             ("unlinked", "未紐付け動画数"),
-            ("rate", "紐付け率"),
+            ("rate", "Rating"),
             ("platforms", "YouTube / TikTok別"),
         ]
         for index, (key, label) in enumerate(link_items):
@@ -890,7 +1091,6 @@ class MainWindow(QMainWindow):
             link_grid.addWidget(caption, index // 2 * 2, index % 2)
             link_grid.addWidget(value, index // 2 * 2 + 1, index % 2)
         layout.addWidget(link_box)
-
         search_box = QGroupBox("検索")
         search_layout = QGridLayout(search_box)
         self.analytics_title_filter = QLineEdit()
@@ -901,9 +1101,9 @@ class MainWindow(QMainWindow):
         self.analytics_min_views_filter.setRange(0, 2_000_000_000)
         self.analytics_min_views_filter.setSingleStep(100)
         self.analytics_date_filter = QLineEdit()
-        self.analytics_date_filter.setPlaceholderText("投稿日 例: 2026-07")
+        self.analytics_date_filter.setPlaceholderText("投稿日 侁E 2026-07")
         self.analytics_rating_filter = QComboBox()
-        self.analytics_rating_filter.addItems(["すべて", "★以上", "★★以上", "★★★以上", "★★★★以上", "★★★★★"])
+        self.analytics_rating_filter.addItems(["All ratings", "1 star", "2 stars", "3 stars", "4 stars", "5 stars"])
         for widget in [
             self.analytics_title_filter,
             self.analytics_genre_filter,
@@ -921,22 +1121,20 @@ class MainWindow(QMainWindow):
         search_layout.addWidget(self.analytics_title_filter, 0, 1)
         search_layout.addWidget(QLabel("ジャンル"), 0, 2)
         search_layout.addWidget(self.analytics_genre_filter, 0, 3)
-        search_layout.addWidget(QLabel("再生数以上"), 1, 0)
+        search_layout.addWidget(QLabel("Posted Date"), 1, 0)
         search_layout.addWidget(self.analytics_min_views_filter, 1, 1)
         search_layout.addWidget(QLabel("投稿日"), 1, 2)
         search_layout.addWidget(self.analytics_date_filter, 1, 3)
         search_layout.addWidget(QLabel("評価"), 2, 0)
         search_layout.addWidget(self.analytics_rating_filter, 2, 1)
         layout.addWidget(search_box)
-
         self.analytics_tabs = QTabWidget()
         graph_panel = QWidget()
         graph_layout = QVBoxLayout(graph_panel)
-        self.analytics_graph_label = QLabel("CSVを読み込むとグラフが表示されます。")
+        self.analytics_graph_label = QLabel("Import CSV to display graphs.")
         self.analytics_graph_label.setAlignment(Qt.AlignCenter)
         self.analytics_graph_label.setMinimumHeight(420)
         graph_layout.addWidget(self.analytics_graph_label)
-
         self.analytics_ranking_text = QTextEdit()
         self.analytics_ranking_text.setReadOnly(True)
         self.analytics_genre_text = QTextEdit()
@@ -955,47 +1153,42 @@ class MainWindow(QMainWindow):
         self.analytics_unmatched_list = QListWidget()
         self.analytics_project_combo = QComboBox()
         link_buttons = QHBoxLayout()
-        save_link_button = QPushButton("紐付け保存")
+        save_link_button = QPushButton("Save Link")
         save_link_button.clicked.connect(self.save_manual_analytics_link)
         unlink_button = QPushButton("紐付け解除")
         unlink_button.clicked.connect(self.remove_manual_analytics_link)
-        link_buttons.addWidget(QLabel("紐付け先"))
+        link_buttons.addWidget(QLabel("Project"))
         link_buttons.addWidget(self.analytics_project_combo, stretch=1)
         link_buttons.addWidget(save_link_button)
         link_buttons.addWidget(unlink_button)
-        unmatched_layout.addWidget(QLabel("紐付け済み動画一覧"))
+        unmatched_layout.addWidget(QLabel("Unlinked Videos"))
         unmatched_layout.addWidget(self.analytics_linked_list, stretch=1)
-        unmatched_layout.addWidget(QLabel("未紐付け動画一覧"))
+        unmatched_layout.addWidget(QLabel("Link Target Project"))
         unmatched_layout.addWidget(self.analytics_unmatched_list, stretch=1)
         unmatched_layout.addLayout(link_buttons)
-
-        self.analytics_tabs.addTab(graph_panel, "グラフ")
+        self.analytics_tabs.addTab(graph_panel, "Graphs")
         self.analytics_tabs.addTab(self.analytics_ranking_text, "ランキング")
-        self.analytics_tabs.addTab(self.analytics_genre_text, "ジャンル分析")
-        self.analytics_tabs.addTab(self.analytics_title_text, "タイトル分析")
-        self.analytics_tabs.addTab(self.analytics_records_text, "動画一覧")
+        self.analytics_tabs.addTab(self.analytics_genre_text, "Genre Analysis")
+        self.analytics_tabs.addTab(self.analytics_title_text, "Title Analysis")
+        self.analytics_tabs.addTab(self.analytics_records_text, "Video List")
         self.analytics_tabs.addTab(self.analytics_project_text, "プロジェクト別成績")
-        self.analytics_tabs.addTab(unmatched_panel, "未紐付け管理")
-        self.analytics_tabs.addTab(self.analytics_comments_text, "コメント")
+        self.analytics_tabs.addTab(unmatched_panel, "Unlinked Management")
+        self.analytics_tabs.addTab(self.analytics_comments_text, "Comments")
         layout.addWidget(self.analytics_tabs, stretch=1)
         self.refresh_analytics_view()
         return panel
-
     def _build_ai_advisor_tab(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
-
         top_row = QHBoxLayout()
         refresh_button = QPushButton("提案を更新")
         refresh_button.clicked.connect(self.refresh_ai_advisor_view)
         top_row.addWidget(refresh_button)
         top_row.addStretch()
         layout.addLayout(top_row)
-
         self.ai_advisor_daily_message = QLabel("")
         self.ai_advisor_daily_message.setStyleSheet("font-size: 18px; font-weight: 700; color: #dcdcaa; padding: 8px;")
         layout.addWidget(self.ai_advisor_daily_message)
-
         grid = QGridLayout()
         self.ai_today_text = QTextEdit()
         self.ai_comments_text = QTextEdit()
@@ -1006,15 +1199,14 @@ class MainWindow(QMainWindow):
         self.ai_goal_text = QTextEdit()
         self.ai_badges_text = QTextEdit()
         self.ai_inventory_text = QTextEdit()
-
         widgets = [
-            ("今日の分析", self.ai_today_text),
-            ("自動コメント", self.ai_comments_text),
-            ("おすすめテーマ", self.ai_themes_text),
+            ("Today Analysis", self.ai_today_text),
+            ("Comments", self.ai_comments_text),
+            ("Recommended Themes", self.ai_themes_text),
             ("おすすめタイトル", self.ai_titles_text),
             ("次の企画", self.ai_plan_text),
-            ("改善ポイント", self.ai_improvements_text),
-            ("制作目標", self.ai_goal_text),
+            ("Improvements", self.ai_improvements_text),
+            ("Goals", self.ai_goal_text),
             ("バッジ", self.ai_badges_text),
             ("ネタ在庫", self.ai_inventory_text),
         ]
@@ -1028,7 +1220,6 @@ class MainWindow(QMainWindow):
         layout.addLayout(grid, stretch=1)
         self.refresh_ai_advisor_view()
         return panel
-
     def set_image_thumbnail_area_height(self, height: int) -> None:
         if not hasattr(self, "image_thumbnail_scroll"):
             return
@@ -1036,9 +1227,8 @@ class MainWindow(QMainWindow):
         self.image_thumbnail_scroll.setMaximumHeight(height)
         if hasattr(self, "assets_splitter"):
             self.assets_splitter.setSizes([height + 40, 180])
-
     def _build_progress_box(self) -> QGroupBox:
-        box = QGroupBox("進捗状況")
+        box = QGroupBox("Progress")
         layout = QHBoxLayout(box)
         self.progress_checks: dict[str, QCheckBox] = {}
         for item in PROGRESS_ITEMS:
@@ -1048,17 +1238,20 @@ class MainWindow(QMainWindow):
             layout.addWidget(check)
         layout.addStretch()
         return box
-
     def _build_folder_box(self) -> QGroupBox:
-        box = QGroupBox("フォルダ")
+        box = QGroupBox("Folders")
         layout = QGridLayout(box)
-        buttons = [("画像フォルダを開く", "images"), ("音声フォルダを開く", "audio"), ("動画フォルダを開く", "video"), ("プロジェクトフォルダを開く", "")]
+        buttons = [
+            ("Images Folder", "images"),
+            ("Audio Folder", "audio"),
+            ("Video Folder", "video"),
+            ("Project Folder", ""),
+        ]
         for index, (label, folder_name) in enumerate(buttons):
             button = QPushButton(label)
             button.clicked.connect(lambda _checked=False, name=folder_name: self.open_project_folder(name))
             layout.addWidget(button, index // 2, index % 2)
         return box
-
     def _load_initial_data(self) -> None:
         self.templates = self.template_service.load()
         self.topics = self.topic_service.load()
@@ -1068,7 +1261,6 @@ class MainWindow(QMainWindow):
         self.refresh_topic_list()
         self.update_wizard()
         self.load_memos()
-
     def apply_settings_to_ui(self) -> None:
         self.duration_box.setCurrentText(self.settings.default_duration)
         self._set_image_count(self.settings.default_image_count)
@@ -1091,7 +1283,6 @@ class MainWindow(QMainWindow):
         self.template_box.addItems([template.name for template in self.templates])
         self.template_box.blockSignals(False)
         self.apply_template()
-
     def reload_projects(self) -> None:
         self.projects = self.project_service.list_projects()
         self.refresh_project_category_filter()
@@ -1105,7 +1296,6 @@ class MainWindow(QMainWindow):
             self.refresh_analytics_view()
         if hasattr(self, "ai_today_text"):
             self.refresh_ai_advisor_view()
-
     def refresh_dashboard(self) -> None:
         stats = self.dashboard_service.build(self.projects)
         self.dashboard_labels["today"].setText(str(stats.today_count))
@@ -1123,7 +1313,6 @@ class MainWindow(QMainWindow):
             item.setData(Qt.UserRole, str(project.path))
             self.recent_list.addItem(item)
         self.refresh_dashboard_analytics()
-
     def refresh_dashboard_analytics(self) -> None:
         if not hasattr(self, "dashboard_analytics_labels"):
             return
@@ -1140,7 +1329,7 @@ class MainWindow(QMainWindow):
         values = {
             "youtube_views": f"{youtube_views:,}",
             "tiktok_views": f"{tiktok_views:,}",
-            "best_week": f"{best.title} ({best.views:,}回)" if best else "CSV未取込",
+            "best_week": f"{best.title} ({best.views:,}囁E" if best else "CSV未取込",
             "unlinked": str(self.analytics_link_summary.unlinked_count),
             "csv_posted": str(csv_posted),
             "improvement": str(improvement_count),
@@ -1148,24 +1337,21 @@ class MainWindow(QMainWindow):
         }
         for key, value in values.items():
             self.dashboard_analytics_labels[key].setText(value)
-
     def import_analytics_csv(self) -> None:
         file_paths, _selected_filter = QFileDialog.getOpenFileNames(
             self,
-            "分析するCSVを選択",
+            "Import CSV",
             str(self.paths.base_dir),
             "CSVファイル (*.csv)",
         )
         if not file_paths:
             return
         self._import_analytics_paths([Path(path) for path in file_paths])
-
     def import_analytics_folder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "CSVフォルダを選択", str(self.paths.base_dir))
+        folder = QFileDialog.getExistingDirectory(self, "Select CSV Folder", str(self.paths.base_dir))
         if not folder:
             return
         self._import_analytics_paths([Path(folder)])
-
     def _import_analytics_paths(self, paths: list[Path]) -> None:
         try:
             self.analytics_report = self.analytics_service.import_paths(paths, self.projects)
@@ -1180,15 +1366,14 @@ class MainWindow(QMainWindow):
         self.refresh_analytics_view()
         self.refresh_ai_advisor_view()
         self.refresh_project_analytics_view()
-        QMessageBox.information(self, "Analytics", "CSVを読み込み、プロジェクト紐付けを更新しました。")
-
+        QMessageBox.information(self, "Analytics", "CSV import completed.")
     def export_analytics_csv(self) -> None:
         if not self.analytics_report.records:
-            QMessageBox.warning(self, "Analyticsエラー", "先にCSVを読み込んでください。")
+            QMessageBox.warning(self, "Analytics", "No CSV data has been imported.")
             return
         output_path, _selected_filter = QFileDialog.getSaveFileName(
             self,
-            "分析結果CSVを保存",
+            "Export CSV",
             str(self.paths.exports_dir / "analytics_result.csv"),
             "CSVファイル (*.csv)",
         )
@@ -1199,8 +1384,7 @@ class MainWindow(QMainWindow):
         except AnalyticsError as exc:
             QMessageBox.warning(self, "Analyticsエラー", str(exc))
             return
-        QMessageBox.information(self, "Analytics", "分析結果CSVを保存しました。")
-
+        QMessageBox.information(self, "Analytics", "CSV export completed.")
     def refresh_analytics_view(self) -> None:
         if not hasattr(self, "analytics_summary_labels"):
             return
@@ -1234,7 +1418,6 @@ class MainWindow(QMainWindow):
             for key, value in link_values.items():
                 self.analytics_link_labels[key].setText(value)
             self.refresh_dashboard_analytics()
-
         self.analytics_ranking_text.setPlainText(self._analytics_ranking_text(report))
         self.analytics_genre_text.setPlainText(self._analytics_genre_text(report))
         self.analytics_title_text.setPlainText(self._analytics_title_text(report))
@@ -1252,41 +1435,39 @@ class MainWindow(QMainWindow):
                 )
         self.refresh_ai_advisor_view()
         self.refresh_project_analytics_view()
-
     def refresh_ai_advisor_view(self) -> None:
         if not hasattr(self, "ai_today_text"):
             return
         self.ai_advisor_report = self.ai_advisor_service.build(self.analytics_report, self.projects, self.topics)
         report = self.ai_advisor_report
         self.ai_advisor_daily_message.setText(report.daily_message)
-        self.ai_today_text.setPlainText("\n".join(f"・{line}" for line in report.today_analysis))
-        self.ai_comments_text.setPlainText("\n".join(f"・{line}" for line in report.comments))
+        self.ai_today_text.setPlainText("\n".join(f"- {line}" for line in report.today_analysis))
+        self.ai_comments_text.setPlainText("\n".join(f"- {line}" for line in report.comments))
         self.ai_themes_text.setPlainText(
             "\n".join(
-                f"{'★' * item.stars}{'☆' * (5 - item.stars)}\n{item.name}\n{item.reason}".strip()
+                f"{'*' * item.stars}{'-' * (5 - item.stars)}\n{item.name}\n{item.reason}".strip()
                 for item in report.recommended_themes
             )
         )
-        self.ai_titles_text.setPlainText("\n".join(f"・{title}" for title in report.recommended_titles))
+        self.ai_titles_text.setPlainText("\n".join(f"- {title}" for title in report.recommended_titles))
         self.ai_plan_text.setPlainText("\n".join(report.next_plan))
-        self.ai_improvements_text.setPlainText("\n".join(f"・{line}" for line in report.improvements))
+        self.ai_improvements_text.setPlainText("\n".join(f"- {line}" for line in report.improvements))
         self.ai_goal_text.setPlainText(
-            f"今月目標\n{report.goal.target}本\n\n現在\n{report.goal.current}本\n\n{report.goal.bar}\n{report.goal.percent}%"
+            f"Monthly target\n{report.goal.target}\n\nCurrent\n{report.goal.current}\n\n{report.goal.bar}\n{report.goal.percent}%"
         )
         self.ai_badges_text.setPlainText(
-            "\n".join(f"{'✅' if badge.achieved else '□'} {badge.label}" for badge in report.badges)
+            "\n".join(f"{'[x]' if badge.achieved else '[ ]'} {badge.label}" for badge in report.badges)
         )
         self.ai_inventory_text.setPlainText(
             "\n".join(
                 [
-                    f"未制作\n{report.inventory.unmade}件",
-                    f"制作中\n{report.inventory.in_progress}件",
-                    f"完成\n{report.inventory.completed}件",
-                    f"投稿済\n{report.inventory.posted}件",
+                    f"Unmade\n{report.inventory.unmade}",
+                    f"In Progress\n{report.inventory.in_progress}",
+                    f"Completed\n{report.inventory.completed}",
+                    f"Posted\n{report.inventory.posted}",
                 ]
             )
         )
-
     def apply_analytics_filters(self) -> None:
         if not hasattr(self, "analytics_records_text"):
             return
@@ -1300,98 +1481,93 @@ class MainWindow(QMainWindow):
             min_rating=rating_index,
         )
         if not records:
-            self.analytics_records_text.setPlainText("該当する動画がありません。")
+            self.analytics_records_text.setPlainText("No analytics records.")
             return
         self.analytics_records_text.setPlainText("\n".join(self._analytics_record_line(record) for record in records))
-
     def _analytics_ranking_text(self, report: AnalyticsReport) -> str:
         if not report.records:
-            return "CSVを読み込むとランキングが表示されます。"
+            return "No CSV data has been imported."
         sections: list[str] = []
         for name, records in report.rankings.items():
-            sections.append(f"【{name} TOP10】")
+            sections.append(f"[{name} TOP10]")
             for index, record in enumerate(records, start=1):
-                if name == "いいね率":
+                if name in {"Like Rate", "like_rate"}:
                     value = f"{record.like_rate:.2f}%"
-                elif name == "コメント率":
+                elif name in {"Comment Rate", "comment_rate"}:
                     value = f"{record.comment_rate:.2f}%"
-                elif name == "いいね":
+                elif name in {"Likes", "likes"}:
                     value = f"{record.likes:,}"
-                elif name == "コメント":
+                elif name in {"Comments", "comments"}:
                     value = f"{record.comments:,}"
                 else:
                     value = f"{record.views:,}"
                 sections.append(f"{index}. {record.title} / {value}")
             sections.append("")
         return "\n".join(sections).strip()
-
     def _analytics_genre_text(self, report: AnalyticsReport) -> str:
         if not report.genre_metrics:
-            return "ジャンル分析データがありません。"
-        lines = ["【ジャンル別】"]
+            return "No genre analysis data."
+        lines = ["Genre Analysis"]
         for metric in report.genre_metrics:
             lines.append(
-                f"{metric.name}: 動画数 {metric.count} / 平均再生数 {metric.average_views:,.0f} / 平均いいね {metric.average_likes:,.0f}"
+                f"{metric.name}: videos {metric.count} / avg views {metric.average_views:,.0f} / avg likes {metric.average_likes:,.0f}"
             )
         lines.append("")
-        lines.append("【カテゴリ別】")
+        lines.append("Category Analysis")
         if not report.category_metrics:
-            lines.append("カテゴリ分析データがありません。")
+            lines.append("No category analysis data.")
         for metric in report.category_metrics:
-            stars = "★" * round(metric.average_rating or 1) + "☆" * (5 - round(metric.average_rating or 1))
+            rating = max(1, min(5, round(metric.average_rating or 1)))
+            stars = "*" * rating + "-" * (5 - rating)
             lines.append(
-                f"{metric.name}: 動画数 {metric.count} / 総再生数 {metric.total_views:,} / 平均再生数 {metric.average_views:,.0f} "
-                f"/ 平均いいね率 {metric.average_like_rate:.2f}% / 平均視聴率 {metric.average_view_percentage:.1f}% / 評価 {stars}"
+                f"{metric.name}: videos {metric.count} / total views {metric.total_views:,} / avg views {metric.average_views:,.0f} "
+                f"/ avg like rate {metric.average_like_rate:.2f}% / avg retention {metric.average_view_percentage:.1f}% / rating {stars}"
             )
         return "\n".join(lines)
-
     def _analytics_title_text(self, report: AnalyticsReport) -> str:
         if not report.records:
-            return "タイトル分析データがありません。"
-        lines = ["【頻出ワード】"]
+            return "No title analysis data."
+        lines = ["Frequent Title Words"]
         for metric in report.word_metrics:
-            lines.append(f"{metric.word}: {metric.count}件 / 平均再生数 {metric.average_views:,.0f}")
+            lines.append(f"{metric.word}: {metric.count} items / avg views {metric.average_views:,.0f}")
         lines.append("")
-        lines.append("【タイトルパターン】")
+        lines.append("Title Pattern Analysis")
         for metric in report.pattern_metrics:
             lines.append(
-                f"{metric.name}: 動画数 {metric.count} / 平均再生数 {metric.average_views:,.0f} / 平均いいね {metric.average_likes:,.0f}"
+                f"{metric.name}: videos {metric.count} / avg views {metric.average_views:,.0f} / avg likes {metric.average_likes:,.0f}"
             )
         return "\n".join(lines)
-
     def _analytics_record_line(self, record) -> str:
-        stars = "★" * record.rating + "☆" * (5 - record.rating)
-        project = f" / project: {record.project_name}" if record.project_name else " / project: 未紐付け"
+        stars = "*" * record.rating + "-" * (5 - record.rating)
+        project = f" / project: {record.project_name}" if record.project_name else " / project: unlinked"
         return (
             f"{stars}  {record.title}\n"
-            f"  ジャンル: {record.genre} / カテゴリ: {record.category or '未分類'} / 再生数: {record.views:,} / いいね: {record.likes:,} "
-            f"/ コメント: {record.comments:,} / いいね率: {record.like_rate:.2f}% / コメント率: {record.comment_rate:.2f}% "
-            f"/ 投稿日: {record.posted_date or '-'}{project}"
+            f"  Genre: {record.genre} / Category: {record.category or 'Uncategorized'} / Views: {record.views:,} / Likes: {record.likes:,} "
+            f"/ Comments: {record.comments:,} / Like rate: {record.like_rate:.2f}% / Comment rate: {record.comment_rate:.2f}% "
+            f"/ Posted: {record.posted_date or '-'}{project}"
         )
-
     def _analytics_project_text(self) -> str:
         if not self.analytics_report.records:
-            return "CSVを読み込むとプロジェクト別成績が表示されます。"
+            return "No project analytics data."
         lines = [
-            "【紐付け状況】",
-            f"紐付け済み: {self.analytics_link_summary.linked_count}",
-            f"未紐付け: {self.analytics_link_summary.unlinked_count}",
-            f"紐付け率: {self.analytics_link_summary.link_rate:.1f}%",
+            "Project Performance",
+            f"Linked: {self.analytics_link_summary.linked_count}",
+            f"Unlinked: {self.analytics_link_summary.unlinked_count}",
+            f"Link rate: {self.analytics_link_summary.link_rate:.1f}%",
             "",
-            "【プロジェクト別成績】",
+            "No linked projects.",
         ]
         grouped: dict[str, list] = {}
         for record in self.analytics_report.records:
-            grouped.setdefault(record.project_name or "未紐付け", []).append(record)
+            grouped.setdefault(record.project_name or "Unlinked", []).append(record)
         for project_name, records in sorted(grouped.items()):
             views = sum(record.views for record in records)
             likes = sum(record.likes for record in records)
             comments = sum(record.comments for record in records)
-            lines.append(f"{project_name}: {len(records)}件 / 再生 {views:,} / いいね {likes:,} / コメント {comments:,}")
+            lines.append(f"{project_name}: {len(records)} items / views {views:,} / likes {likes:,} / comments {comments:,}")
             for record in records:
-                lines.append(f"  - {record.platform}: {record.title} ({record.views:,}回)")
+                lines.append(f"  - {record.platform}: {record.title} ({record.views:,} views)")
         return "\n".join(lines)
-
     def refresh_analytics_link_controls(self) -> None:
         if not hasattr(self, "analytics_unmatched_list"):
             return
@@ -1414,117 +1590,114 @@ class MainWindow(QMainWindow):
         if current_project:
             self.analytics_project_combo.setCurrentText(current_project)
         self.analytics_project_combo.blockSignals(False)
-
     def save_manual_analytics_link(self) -> None:
         record = self._selected_unmatched_record()
         if record is None:
-            QMessageBox.warning(self, "Analyticsエラー", "紐付ける未紐付け動画を選択してください。")
+            QMessageBox.warning(self, "Analytics", "Select an unlinked video.")
             return
         project_name = self.analytics_project_combo.currentData()
         if not project_name:
-            QMessageBox.warning(self, "Analyticsエラー", "紐付け先プロジェクトを選択してください。")
+            QMessageBox.warning(self, "Analytics", "Select a project to link.")
             return
         self.analytics_link_service.save_manual_link(record, str(project_name))
         record.project_name = str(project_name)
         self.analytics_link_summary = self.analytics_link_service.apply_links(self.analytics_report.records, self.projects)
         self.project_analytics_service.save_project_analytics(self.projects, self.analytics_report.records)
         self.refresh_analytics_view()
-        QMessageBox.information(self, "Analytics", "手動紐付けを保存しました。")
-
+        QMessageBox.information(self, "Analytics", "Link saved.")
     def remove_manual_analytics_link(self) -> None:
         record = self._selected_analytics_record_for_unlink()
         if record is None:
-            QMessageBox.warning(self, "Analyticsエラー", "解除する動画を選択してください。未紐付け一覧または動画一覧の対象を選び直してください。")
+            QMessageBox.warning(self, "Analytics", "Select a linked project or video to unlink.")
             return
         self.analytics_link_service.remove_manual_link(record)
         record.project_name = ""
         self.analytics_link_summary = self.analytics_link_service.apply_links(self.analytics_report.records, self.projects)
         self.refresh_analytics_view()
-        QMessageBox.information(self, "Analytics", "手動紐付けを解除しました。")
-
+        QMessageBox.information(self, "Analytics", "Link removed.")
     def _selected_unmatched_record(self):
         selected = self.analytics_unmatched_list.currentItem() if hasattr(self, "analytics_unmatched_list") else None
         if selected is None:
             return None
         key = selected.data(Qt.UserRole)
         return next((record for record in self.analytics_report.records if self.analytics_link_service.record_key(record) == key), None)
-
     def _selected_analytics_record_for_unlink(self):
         selected = self.analytics_linked_list.currentItem() if hasattr(self, "analytics_linked_list") else None
         if selected is None:
             return None
         key = selected.data(Qt.UserRole)
         return next((record for record in self.analytics_report.records if self.analytics_link_service.record_key(record) == key), None)
-
     def refresh_project_analytics_view(self) -> None:
         if not hasattr(self, "project_analytics_text"):
             return
         if self.current_project is None:
-            self.project_analytics_text.setPlainText("プロジェクトを選択してください。")
+            self.project_analytics_text.setPlainText("No project selected.")
             return
         report = self.project_analytics_service.build_project_report(self.current_project, self.analytics_report, self.topics)
         self.project_analytics_text.setPlainText(self._project_analytics_report_text(report))
-
     def open_project_analytics_url(self, platform: str) -> None:
         if self.current_project is None:
             return
         report = self.project_analytics_service.build_project_report(self.current_project, self.analytics_report, self.topics)
         record = report.youtube if platform == "YouTube" else report.tiktok
         if not record or not record.url:
-            QMessageBox.information(self, "Analytics", f"{platform} URLは未取得です。")
+            QMessageBox.information(self, "Analytics", f"{platform} URL is not available.")
             return
         webbrowser.open(record.url)
-
     def _project_analytics_report_text(self, report: ProjectAnalyticsReport) -> str:
-        lines = [f"個別分析: {report.project.title or report.project.topic or report.project.name}", ""]
+        lines = [f"Project Analytics: {report.project.title or report.project.topic or report.project.name}", ""]
         lines.extend(self._platform_project_lines("YouTube", report.youtube, report.youtube_insight))
         lines.append("")
         lines.extend(self._platform_project_lines("TikTok", report.tiktok, report.tiktok_insight))
         lines.append("")
-        lines.append("【YouTube / TikTok 横断比較】")
-        lines.extend(f"・{line}" for line in report.cross_platform_comments)
+        lines.append("YouTube / TikTok Comparison")
+        lines.extend(f"- {line}" for line in report.cross_platform_comments)
         lines.append("")
-        lines.append("【続編候補】")
-        lines.extend([f"・{topic}" for topic in report.continuation_topics] or ["分析データ不足"])
+        lines.append("Continuation Ideas")
+        lines.extend([f"- {topic}" for topic in report.continuation_topics] or ["Not enough analysis data"])
         return "\n".join(lines)
-
     def _platform_project_lines(self, platform: str, record, insight) -> list[str]:
-        stars = "★" * insight.rating + "☆" * (5 - insight.rating)
+        stars = "*" * insight.rating + "-" * (5 - insight.rating)
         if record is None:
-            return [f"【{platform}】", "投稿状態: 未投稿または未取得", "データ: 未取得"]
+            return [f"{platform}", "Status: not available", "Rating: not available"]
         if platform == "YouTube":
             metrics = [
-                f"投稿状態: CSVから投稿確認済み",
-                f"公開日: {record.posted_date or '未取得'}",
-                f"URL: {record.url or '未取得'}",
-                f"視聴回数: {record.views:,}",
-                f"高評価数: {record.likes:,}",
-                f"コメント数: {record.comments:,}",
-                f"CTR: {record.ctr:.2f}%" if record.ctr else "CTR: 未取得",
-                f"平均視聴時間: {record.average_view_duration:.1f}秒" if record.average_view_duration else "平均視聴時間: 未取得",
-                f"平均視聴率: {record.average_percentage_viewed:.2f}%" if record.average_percentage_viewed else "平均視聴率: 未取得",
-                f"登録者増減: {record.subscriber_change:,}",
+                "Status: confirmed from CSV",
+                f"Posted: {record.posted_date or 'N/A'}",
+                f"URL: {record.url or 'N/A'}",
+                f"Views: {record.views:,}",
+                f"Likes: {record.likes:,}",
+                f"Comments: {record.comments:,}",
+                f"CTR: {record.ctr:.2f}%" if record.ctr else "CTR: N/A",
+                f"Average view duration: {record.average_view_duration:.1f}s"
+                if record.average_view_duration
+                else "Average view duration: N/A",
+                f"Average viewed: {record.average_percentage_viewed:.2f}%"
+                if record.average_percentage_viewed
+                else "Average viewed: N/A",
+                f"Subscriber change: {record.subscriber_change:,}",
             ]
         else:
             metrics = [
-                f"投稿状態: CSVから投稿確認済み",
-                f"投稿日: {record.posted_date or '未取得'}",
-                f"URL: {record.url or '未取得'}",
-                f"視聴回数: {record.views:,}",
-                f"いいね数: {record.likes:,}",
-                f"コメント数: {record.comments:,}",
-                f"シェア数: {record.shares:,}",
-                f"保存数: {record.saves:,}",
-                f"平均視聴時間: {record.average_view_duration:.1f}秒" if record.average_view_duration else "平均視聴時間: 未取得",
-                f"完視聴率: {record.completion_rate:.2f}%" if record.completion_rate else "完視聴率: 未取得",
-                f"フォロワー増減: {record.follower_change:,}",
+                "Status: confirmed from CSV",
+                f"Posted: {record.posted_date or 'N/A'}",
+                f"URL: {record.url or 'N/A'}",
+                f"Views: {record.views:,}",
+                f"Likes: {record.likes:,}",
+                f"Comments: {record.comments:,}",
+                f"Shares: {record.shares:,}",
+                f"Saves: {record.saves:,}",
+                f"Average view duration: {record.average_view_duration:.1f}s"
+                if record.average_view_duration
+                else "Average view duration: N/A",
+                f"Completion rate: {record.completion_rate:.2f}%" if record.completion_rate else "Completion rate: N/A",
+                f"Follower change: {record.follower_change:,}",
             ]
-        lines = [f"【{platform}】", *metrics, f"評価: {stars} {insight.label}", "伸びた理由:"]
-        lines.extend(f"・{line}" for line in insight.reasons)
-        lines.append("次回改善案:")
-        lines.extend(f"・{line}" for line in insight.improvements)
+        lines = [f"{platform}", *metrics, f"Rating: {stars} {insight.label}", "Reasons:"]
+        lines.extend(f"- {line}" for line in insight.reasons)
+        lines.append("Improvements:")
+        lines.extend(f"- {line}" for line in insight.improvements)
         return lines
-
     def refresh_project_list(self) -> None:
         criteria = self._project_filter_criteria()
         filtered_projects = self.project_filter_service.filter(self.projects, criteria)
@@ -1540,7 +1713,6 @@ class MainWindow(QMainWindow):
                 item.setSelected(True)
         self.project_list.blockSignals(False)
         self.project_count_label.setText(f"表示中: {len(filtered_projects)}件 / 全{len(self.projects)}件")
-
     def _project_filter_criteria(self) -> ProjectFilterCriteria:
         return ProjectFilterCriteria(
             keyword=self.project_search.text(),
@@ -1553,7 +1725,6 @@ class MainWindow(QMainWindow):
             min_rating=self.project_rating_filter.currentIndex(),
             min_views=self.project_min_views_filter.value(),
         )
-
     def reset_project_filters(self) -> None:
         self.project_search.clear()
         self.tag_filter.clear()
@@ -1565,13 +1736,12 @@ class MainWindow(QMainWindow):
         self.refresh_project_category_filter()
         self.refresh_project_series_filter()
         self.refresh_project_list()
-
     def on_project_filter_genre_changed(self) -> None:
         self.refresh_project_category_filter()
         self.refresh_project_series_filter()
         self.refresh_project_list()
-
     def on_project_filter_category_changed(self) -> None:
+        self.refresh_project_series_filter()
         self.refresh_project_series_filter()
         self.refresh_project_list()
 
@@ -1755,7 +1925,6 @@ class MainWindow(QMainWindow):
         categories = self.categories_by_genre.get(genre, [])
         self.category_box.blockSignals(True)
         self.category_box.clear()
-        self.category_box.addItem("")
         self.category_box.addItems(categories)
         if current and self.category_box.findText(current) < 0:
             self.category_box.addItem(current)
@@ -1771,7 +1940,6 @@ class MainWindow(QMainWindow):
                 self.bulk_category_box.addItem(bulk_current)
             if bulk_current:
                 self.bulk_category_box.setCurrentText(bulk_current)
-
     def save_current_project_classification(self) -> None:
         if self._suspend_project_classification_save or not self.current_project:
             return
@@ -1793,7 +1961,7 @@ class MainWindow(QMainWindow):
                 series=series,
             )
         except OSError as exc:
-            QMessageBox.critical(self, "保存エラー", f"カテゴリ情報の保存に失敗しました。\n{exc}")
+            QMessageBox.critical(self, "Save Error", f"Failed to save settings.\n{exc}")
             return
         self.current_project = updated
         for index, project in enumerate(self.projects):
@@ -1804,7 +1972,6 @@ class MainWindow(QMainWindow):
         self.refresh_project_series_filter()
         self.refresh_project_list()
         self.refresh_dashboard()
-
     def refresh_category_manage_list(self) -> None:
         if not hasattr(self, "category_manage_list"):
             return
@@ -1812,46 +1979,42 @@ class MainWindow(QMainWindow):
         self.category_manage_list.clear()
         for category in self.categories_by_genre.get(genre, []):
             self.category_manage_list.addItem(category)
-
     def add_category(self) -> None:
         genre = self.category_manage_genre_box.currentText() or self.genre_box.currentText()
-        category, ok = QInputDialog.getText(self, "カテゴリ追加", f"{genre} に追加するカテゴリ")
+        category, ok = QInputDialog.getText(self, "Add Category", f"Category for {genre}")
         if not ok or not category.strip():
             return
         self.categories_by_genre = self.category_service.add_category(genre, category, self.categories_by_genre)
         self.category_service.save(self.categories_by_genre)
         self.refresh_category_ui()
-
     def edit_category(self) -> None:
         selected = self.category_manage_list.currentItem()
         if selected is None:
-            QMessageBox.warning(self, "カテゴリ管理", "編集するカテゴリを選択してください。")
+            QMessageBox.warning(self, "Category", "Select a category first.")
             return
         genre = self.category_manage_genre_box.currentText()
         old_category = selected.text()
-        new_category, ok = QInputDialog.getText(self, "カテゴリ編集", "新しいカテゴリ名", text=old_category)
+        new_category, ok = QInputDialog.getText(self, "Edit Category", "Category", text=old_category)
         if not ok or not new_category.strip():
             return
         self.categories_by_genre = self.category_service.rename_category(genre, old_category, new_category, self.categories_by_genre)
         self.category_service.save(self.categories_by_genre)
         self.refresh_category_ui()
-
     def delete_category(self) -> None:
         selected = self.category_manage_list.currentItem()
         if selected is None:
-            QMessageBox.warning(self, "カテゴリ管理", "削除するカテゴリを選択してください。")
+            QMessageBox.warning(self, "Category", "Select a category first.")
             return
         genre = self.category_manage_genre_box.currentText()
         category = selected.text()
         if self.category_service.is_category_used(self.projects, genre, category):
-            QMessageBox.warning(self, "カテゴリ管理", "このカテゴリを使用中のプロジェクトがあります。先にプロジェクト側のカテゴリを変更してください。")
+            QMessageBox.warning(self, "Category", "This category is used by projects and cannot be deleted.")
             return
-        if QMessageBox.question(self, "カテゴリ削除", f"{category} をカテゴリ一覧から削除しますか？") != QMessageBox.Yes:
+        if QMessageBox.question(self, "Delete Category", f"Delete {category}?") != QMessageBox.Yes:
             return
         self.categories_by_genre = self.category_service.delete_category(genre, category, self.categories_by_genre)
         self.category_service.save(self.categories_by_genre)
         self.refresh_category_ui()
-
     def move_category(self, direction: int) -> None:
         selected = self.category_manage_list.currentItem()
         if selected is None:
@@ -1864,17 +2027,14 @@ class MainWindow(QMainWindow):
         matching = self.category_manage_list.findItems(category, Qt.MatchExactly)
         if matching:
             self.category_manage_list.setCurrentItem(matching[0])
-
     def refresh_category_ui(self) -> None:
         self.refresh_form_categories()
         self.refresh_category_manage_list()
         self.refresh_project_category_filter()
         self.refresh_project_list()
-
     def current_template(self) -> PromptTemplate | None:
         name = self.template_box.currentText()
         return next((template for template in self.templates if template.name == name), None)
-
     def generate_prompt(self) -> None:
         values = self._read_form_values()
         if values is None:
@@ -1884,20 +2044,17 @@ class MainWindow(QMainWindow):
         self.prompt_text.setPlainText(prompt)
         self.content_tabs.setCurrentWidget(self.prompt_text)
         self.update_wizard()
-        self.status_label.setText("JSON出力指定のChatGPT用プロンプトを生成しました。")
-
+        self.status_label.setText("Prompt for ChatGPT was generated.")
     def open_chatgpt(self) -> None:
         webbrowser.open("https://chatgpt.com/")
-        self.status_label.setText("ChatGPTをブラウザで開きました。")
-
+        self.status_label.setText("Prompt copied.")
     def copy_prompt(self) -> None:
         text = self.prompt_text.toPlainText().strip()
         if not text:
-            QMessageBox.warning(self, "コピーエラー", "コピーするプロンプトがありません。")
+            QMessageBox.warning(self, "Image Prompt", "No project is selected.")
             return
         QGuiApplication.clipboard().setText(text)
-        self.status_label.setText("プロンプトをコピーしました。ChatGPTへ貼り付けてください。")
-
+        self.status_label.setText("Image generation prompt was generated.")
     def refresh_bulk_image_prompt(self) -> None:
         image_count = int(self.image_count_box.currentText())
         prompt = build_bulk_image_prompt(
@@ -1908,19 +2065,17 @@ class MainWindow(QMainWindow):
         )
         self.bulk_image_prompt_text.setPlainText(prompt)
         self.content_tabs.setCurrentWidget(self.bulk_image_prompt_text.parentWidget())
-        self.status_label.setText("画像生成プロンプトを作成しました。内容を確認してコピーできます。")
-
+        self.status_label.setText("Image generation prompt copied.")
     def copy_bulk_image_prompt(self) -> None:
         if not self.bulk_image_prompt_text.toPlainText().strip():
             self.refresh_bulk_image_prompt()
         text = self.bulk_image_prompt_text.toPlainText().strip()
         if not text:
-            QMessageBox.warning(self, "コピーエラー", "画像生成プロンプトがありません。")
+            QMessageBox.warning(self, "Theme", "No theme text to copy.")
             return
         QGuiApplication.clipboard().setText(text)
-        self.status_label.setText("画像生成プロンプトをコピーしました。ChatGPTへ貼り付けてください。")
-        QMessageBox.information(self, "コピー成功", "画像生成プロンプトをコピーしました。")
-
+        self.status_label.setText("Theme copied.")
+        QMessageBox.information(self, "Theme", "Theme copied to clipboard.")
     def _current_image_prompts(self) -> list[str]:
         text = self.preview_images.toPlainText().strip()
         prompts = self._split_image_prompt_text(text)
@@ -1929,7 +2084,6 @@ class MainWindow(QMainWindow):
         if self.current_project is None:
             return []
         return [prompt for _index, prompt, _generated in self.project_service.image_prompt_items(self.current_project) if prompt.strip()]
-
     def _split_image_prompt_text(self, text: str) -> list[str]:
         if not text.strip():
             return []
@@ -1937,7 +2091,6 @@ class MainWindow(QMainWindow):
         if len(blocks) > 1:
             return blocks
         return [line.strip() for line in text.splitlines() if line.strip()]
-
     def create_project(self) -> None:
         values = self._read_form_values()
         if values is None:
@@ -1949,7 +2102,7 @@ class MainWindow(QMainWindow):
         try:
             self.current_project = self.project_service.create_project(topic, genre, duration, image_count, prompt, self.template_box.currentText(), tags, series or topic, category)
         except OSError as exc:
-            QMessageBox.critical(self, "作成エラー", f"プロジェクトの作成に失敗しました。\n{exc}")
+            QMessageBox.critical(self, "Create Error", f"Failed to create project.\n{exc}")
             return
         if topic not in self.topics:
             self.topics.append(topic)
@@ -1959,12 +2112,11 @@ class MainWindow(QMainWindow):
         self.update_asset_list()
         self.update_image_prompt_list()
         self.update_wizard()
-        self.status_label.setText(f"プロジェクトを作成しました: {self.current_project.name}")
-
+        self.status_label.setText(f"Created project: {self.current_project.name}")
     def start_bulk_projects(self) -> None:
         topics = list(dict.fromkeys([line.strip() for line in self.bulk_topics.toPlainText().splitlines() if line.strip()]))
         if not topics:
-            QMessageBox.warning(self, "一括作成エラー", "作成するテーマを1行ずつ入力してください。")
+            QMessageBox.warning(self, "Bulk Projects", "Enter at least one topic.")
             return
         duration = self.duration_box.currentText()
         genre = self.genre_box.currentText()
@@ -1974,30 +2126,26 @@ class MainWindow(QMainWindow):
         template = self.current_template()
         tags = self._parse_tags()
         self.ensure_category_registered(genre, category)
-
         def make_prompt(topic: str) -> str:
             return build_chatgpt_prompt(topic, duration, genre, image_count, template)
-
         try:
             created = self.project_service.create_projects_from_topics(topics, genre, category, duration, image_count, self.template_box.currentText(), make_prompt, tags if tags else [],)
             if series:
                 created = [self.project_service.update_project_classification(project, series=series) for project in created]
         except OSError as exc:
-            QMessageBox.critical(self, "一括作成エラー", f"プロジェクト作成に失敗しました。\n{exc}")
+            QMessageBox.critical(self, "Bulk Projects", f"Failed to create projects.\n{exc}")
             return
         self.topics = list(dict.fromkeys(self.topics + topics))
         self.topic_service.save(self.topics)
         self.current_project = created[-1]
         self.reload_projects()
         self._load_project(self.current_project.path)
-        self.status_label.setText(f"{len(created)}件のプロジェクトを順番に作成しました。")
-
+        self.status_label.setText(f"Created {len(created)} projects.")
     def schedule_auto_parse(self) -> None:
         self.auto_parse_timer.start()
-
     def auto_parse_answer(self) -> None:
         if self.current_project is None:
-            self.status_label.setText("回答を保存するには、先にプロジェクトを作成または選択してください。")
+            self.status_label.setText("Select a project before pasting JSON.")
             return
         raw_text = self.answer_text.toPlainText().strip()
         if not raw_text:
@@ -2015,13 +2163,13 @@ class MainWindow(QMainWindow):
         self.update_progress_view()
         self.update_asset_list()
         self.update_image_prompt_list()
+        self.update_image_generation_view()
         self.update_wizard()
         self.reload_projects()
-        self.status_label.setText("ChatGPT回答をJSON解析して保存しました。")
-
+        self.status_label.setText("ChatGPT JSON imported.")
     def save_preview_files(self) -> None:
         if self.current_project is None:
-            QMessageBox.warning(self, "保存エラー", "先にプロジェクトを作成または選択してください。")
+            QMessageBox.warning(self, "Preview", "Select a project first.")
             return
         self.project_service.save_preview_files(
             self.current_project,
@@ -2039,11 +2187,10 @@ class MainWindow(QMainWindow):
         self.update_image_prompt_list()
         self.update_wizard()
         self.reload_projects()
-        self.status_label.setText("プレビュー内容を保存しました。")
-
+        self.status_label.setText("Preview files saved.")
     def generate_voice(self) -> None:
         if self.current_project is None:
-            QMessageBox.warning(self, "音声生成エラー", "先にプロジェクトを作成または選択してください。")
+            QMessageBox.warning(self, "VOICEVOX", "Select a project first.")
             return
         result = self.voicevox_service.synthesize_project(self.current_project.path)
         if not result.success:
@@ -2057,10 +2204,9 @@ class MainWindow(QMainWindow):
         self.update_wizard()
         self.reload_projects()
         self.status_label.setText(result.message)
-
     def render_video(self) -> None:
         if self.current_project is None:
-            QMessageBox.warning(self, "動画生成エラー", "先にプロジェクトを作成または選択してください。")
+            QMessageBox.warning(self, "FFmpeg", "Select a project first.")
             return
         result = self.video_render_service.render_project(self.current_project)
         if not result.success:
@@ -2074,11 +2220,297 @@ class MainWindow(QMainWindow):
         self.reload_projects()
         self.status_label.setText(result.message)
         self.content_tabs.setCurrentIndex(5)
-
+    def upload_to_youtube(self) -> None:
+        self._start_youtube_upload(retry=False)
+    def retry_youtube_upload(self) -> None:
+        self._start_youtube_upload(retry=True)
+    def _start_youtube_upload(self, retry: bool = False) -> None:
+        if self.current_project is None:
+            QMessageBox.warning(self, "YouTube Upload", "Select a project first.")
+            return
+        if self.youtube_upload_thread and self.youtube_upload_thread.isRunning():
+            return
+        self.current_project = self.job_service.ensure_job(self.project_service.load_project(self.current_project.path))
+        upload_state = self.current_project.youtube_upload or {}
+        if upload_state.get("video_id"):
+            QMessageBox.information(self, "YouTube Upload", "This project already has a YouTube video ID.")
+            self.update_youtube_upload_view()
+            return
+        if retry and upload_state.get("status") == "uploaded":
+            QMessageBox.information(self, "YouTube Upload", "Upload is not retryable. Use Retry Upload only before a video ID is set.")
+            self.update_youtube_upload_view()
+            return
+        self._set_youtube_upload_controls_enabled(False)
+        self.youtube_upload_progress_label.setText("starting")
+        self.youtube_upload_thread = QThread(self)
+        self.youtube_upload_worker = YouTubeUploadWorker(self.youtube_upload_service, self.current_project, retry=retry)
+        self.youtube_upload_project_path = self.current_project.path
+        self.youtube_upload_worker.moveToThread(self.youtube_upload_thread)
+        self.youtube_upload_thread.started.connect(self.youtube_upload_worker.run)
+        self.youtube_upload_worker.progress.connect(self.on_youtube_upload_progress)
+        self.youtube_upload_worker.finished.connect(self.youtube_upload_thread.quit)
+        self.youtube_upload_worker.failed.connect(self.youtube_upload_thread.quit)
+        self.youtube_upload_worker.finished.connect(self.on_youtube_upload_finished)
+        self.youtube_upload_worker.failed.connect(self.on_youtube_upload_failed)
+        self.youtube_upload_thread.finished.connect(self.youtube_upload_worker.deleteLater)
+        self.youtube_upload_thread.finished.connect(self.youtube_upload_thread.deleteLater)
+        self.youtube_upload_thread.finished.connect(self._clear_youtube_upload_worker)
+        self.youtube_upload_thread.start()
+    def on_youtube_upload_progress(self, event: dict) -> None:
+        status = str(event.get("status", "uploading"))
+        message = str(event.get("message", ""))
+        percent = event.get("percent")
+        retrying = bool(event.get("retrying", False))
+        retry_count = int(event.get("retry_count", 0) or 0)
+        percent_text = "-" if percent is None else f"{percent}%"
+        retry_text = f" retry {retry_count}" if retrying else ""
+        self.youtube_upload_status_label.setText(status)
+        self.youtube_upload_progress_label.setText(f"{message} {percent_text}{retry_text}".strip())
+        self.status_label.setText(f"YouTube upload: {message}")
+    def on_youtube_upload_finished(self, result: dict) -> None:
+        if self.current_project is not None:
+            self.current_project = self.project_service.load_project(self.current_project.path)
+        self.update_youtube_upload_view()
+        self.reload_projects()
+        self.status_label.setText("YouTube upload started.")
+        QMessageBox.information(self, "YouTube Upload", "YouTube PRIVATE upload completed.")
+    def on_youtube_upload_failed(self, message: str) -> None:
+        if self.current_project is not None:
+            self.current_project = self.project_service.load_project(self.current_project.path)
+        self.update_youtube_upload_view()
+        self.status_label.setText("YouTube upload failed.")
+        QMessageBox.warning(self, "YouTube Upload", message)
+    def _clear_youtube_upload_worker(self) -> None:
+        self.youtube_upload_thread = None
+        self.youtube_upload_worker = None
+        self.youtube_upload_project_path = None
+        self.update_youtube_upload_view()
+    def update_youtube_upload_view(self) -> None:
+        if not hasattr(self, "youtube_upload_status_label"):
+            return
+        if self.current_project is None:
+            self.job_status_label.setText("-")
+            self.youtube_upload_status_label.setText("pending")
+            self.youtube_upload_video_id_label.setText("-")
+            self.youtube_upload_time_label.setText("-")
+            self.youtube_upload_progress_label.setText("-")
+            self._set_youtube_upload_controls_enabled(True)
+            return
+        self.current_project = self.job_service.ensure_job(self.current_project)
+        upload_state = self.current_project.youtube_upload or {}
+        job = self.current_project.job or {}
+        status = str(upload_state.get("status") or "pending")
+        video_id = str(upload_state.get("video_id") or "-")
+        url = str(upload_state.get("url") or "")
+        active_upload = self.youtube_upload_thread is not None and self.youtube_upload_thread.isRunning()
+        self.job_status_label.setText(str(job.get("status") or "-"))
+        self.youtube_upload_status_label.setText(status)
+        self.youtube_upload_video_id_label.setText(video_id)
+        self.youtube_upload_time_label.setText(str(upload_state.get("upload_timestamp") or "-"))
+        if upload_state.get("last_error"):
+            self.youtube_upload_progress_label.setText(str(upload_state.get("last_error")))
+        elif status == "uploaded":
+            self.youtube_upload_progress_label.setText("completed")
+        else:
+            self.youtube_upload_progress_label.setText("-")
+        self.youtube_open_button.setEnabled(bool(url) and not active_upload)
+        self.youtube_upload_button.setEnabled(not active_upload and not bool(upload_state.get("video_id")) and status != "uploading")
+        self.youtube_retry_button.setEnabled(not active_upload and status == "failed" and not bool(upload_state.get("video_id")))
+    def _set_youtube_upload_controls_enabled(self, enabled: bool) -> None:
+        if not hasattr(self, "youtube_upload_button"):
+            return
+        self.youtube_upload_button.setEnabled(enabled)
+        self.youtube_retry_button.setEnabled(enabled)
+        self.youtube_open_button.setEnabled(enabled)
+    def open_youtube_upload_url(self) -> None:
+        if self.current_project is None:
+            return
+        url = str((self.current_project.youtube_upload or {}).get("url") or "")
+        if url:
+            webbrowser.open(url)
+    def connect_tiktok(self) -> None:
+        if self.tiktok_thread and self.tiktok_thread.isRunning():
+            return
+        try:
+            if not self.tiktok_oauth_service.token_store.load_client_secret(self.tiktok_oauth_service._token_key()):
+                secret, accepted = QInputDialog.getText(
+                    self,
+                    "TikTok client secret",
+                    "TikTok client secret is not stored in Windows Credential Manager.",
+                    QLineEdit.Password,
+                )
+                if not accepted:
+                    return
+                self.tiktok_oauth_service.save_client_secret(secret.strip())
+        except Exception as exc:
+            QMessageBox.warning(self, "TikTok Upload", str(exc))
+            return
+        self._start_tiktok_worker(TikTokConnectWorker(self.tiktok_oauth_service), "connect")
+    def upload_to_tiktok(self) -> None:
+        self._start_tiktok_upload(retry=False)
+    def retry_tiktok_upload(self) -> None:
+        self._start_tiktok_upload(retry=True)
+    def _start_tiktok_upload(self, retry: bool = False) -> None:
+        if self.current_project is None:
+            QMessageBox.warning(self, "TikTok Upload", "Select a project first.")
+            return
+        if self.tiktok_thread and self.tiktok_thread.isRunning():
+            return
+        project = self.project_service.load_project(self.current_project.path)
+        state = project.tiktok_upload or {}
+        if state.get("status") == "uploaded" or (state.get("publish_id") and state.get("status") in {"processing", "action_required", "uploaded"}):
+            QMessageBox.information(self, "TikTok Upload", "This project already has a TikTok upload. Use Check Status to continue.")
+            self.update_tiktok_upload_view()
+            return
+        if retry and state.get("publish_id"):
+            QMessageBox.information(self, "TikTok Upload", "Retry is available only before a publish ID is set.")
+            self.update_tiktok_upload_view()
+            return
+        self.current_project = project
+        self._start_tiktok_worker(TikTokUploadWorker(self.tiktok_upload_service, project, retry=retry), "upload")
+    def check_tiktok_status(self) -> None:
+        if self.current_project is None:
+            QMessageBox.warning(self, "TikTok Upload", "Select a project first.")
+            return
+        if self.tiktok_thread and self.tiktok_thread.isRunning():
+            return
+        self._start_tiktok_worker(TikTokStatusWorker(self.tiktok_upload_service, self.current_project), "status")
+    def disconnect_tiktok(self) -> None:
+        if self.tiktok_thread and self.tiktok_thread.isRunning():
+            return
+        try:
+            self.tiktok_oauth_service.disconnect()
+        except Exception as exc:
+            QMessageBox.warning(self, "TikTok Upload", str(exc))
+            return
+        self.status_label.setText("TikTok upload started.")
+        self.update_tiktok_upload_view()
+    def _start_tiktok_worker(self, worker: QObject, mode: str) -> None:
+        self._set_tiktok_controls_enabled(False)
+        self.tiktok_progress_label.setText("starting")
+        self.tiktok_thread = QThread(self)
+        self.tiktok_worker = worker
+        worker.moveToThread(self.tiktok_thread)
+        self.tiktok_thread.started.connect(worker.run)
+        if hasattr(worker, "progress"):
+            worker.progress.connect(self.on_tiktok_progress)
+        worker.finished.connect(self.tiktok_thread.quit)
+        worker.failed.connect(self.tiktok_thread.quit)
+        if mode == "connect":
+            worker.finished.connect(self.on_tiktok_connect_finished)
+        elif mode == "status":
+            worker.finished.connect(self.on_tiktok_status_finished)
+        else:
+            worker.finished.connect(self.on_tiktok_upload_finished)
+        worker.failed.connect(self.on_tiktok_failed)
+        self.tiktok_thread.finished.connect(worker.deleteLater)
+        self.tiktok_thread.finished.connect(self.tiktok_thread.deleteLater)
+        self.tiktok_thread.finished.connect(self._clear_tiktok_worker)
+        self.tiktok_thread.start()
+    def on_tiktok_progress(self, event: dict) -> None:
+        status = str(event.get("status", "uploading"))
+        message = str(event.get("message", ""))
+        percent = event.get("percent")
+        retrying = bool(event.get("retrying", False))
+        retry_count = int(event.get("retry_count", 0) or 0)
+        percent_text = "-" if percent is None else f"{percent}%"
+        retry_text = f" retry {retry_count}" if retrying else ""
+        self.tiktok_upload_status_label.setText(status)
+        self.tiktok_progress_label.setText(f"{message} {percent_text}{retry_text}".strip())
+        self.status_label.setText(f"TikTok upload: {message}")
+    def on_tiktok_connect_finished(self, _result: dict) -> None:
+        self.update_tiktok_upload_view()
+        self.status_label.setText("TikTok OAuth started.")
+        QMessageBox.information(self, "TikTok Upload", "TikTok OAuth completed.")
+    def on_tiktok_upload_finished(self, _result: dict) -> None:
+        if self.current_project is not None:
+            self.current_project = self.project_service.load_project(self.current_project.path)
+        self.update_tiktok_upload_view()
+        self.reload_projects()
+        self.status_label.setText("TikTok status check completed.")
+        QMessageBox.information(self, "TikTok Upload", "TikTok status was updated.")
+    def on_tiktok_status_finished(self, _result: dict) -> None:
+        if self.current_project is not None:
+            self.current_project = self.project_service.load_project(self.current_project.path)
+        self.update_tiktok_upload_view()
+        self.status_label.setText("TikTok status check failed.")
+    def on_tiktok_failed(self, message: str) -> None:
+        if self.current_project is not None:
+            self.current_project = self.project_service.load_project(self.current_project.path)
+        self.update_tiktok_upload_view()
+        self.status_label.setText("TikTok upload failed.")
+        QMessageBox.warning(self, "TikTok Upload", message)
+    def on_story_exported(self, project_path: Path) -> None:
+        if self.current_project is not None and self.current_project.path == project_path:
+            self.current_project = self.project_service.load_project(project_path)
+        self.reload_projects()
+        self.update_wizard()
+        self.status_label.setText("Story exported to Factory files.")
+    def on_production_run_updated(self, project_path: Path) -> None:
+        if self.current_project is not None and self.current_project.path == project_path:
+            self.current_project = self.project_service.load_project(project_path)
+        self.reload_projects()
+        self.update_wizard()
+        self.status_label.setText("Production run updated.")
+    def _clear_tiktok_worker(self) -> None:
+        self.tiktok_thread = None
+        self.tiktok_worker = None
+        self.update_tiktok_upload_view()
+    def update_tiktok_upload_view(self) -> None:
+        if not hasattr(self, "tiktok_upload_status_label"):
+            return
+        active = self.tiktok_thread is not None and self.tiktok_thread.isRunning()
+        try:
+            connected = self.tiktok_oauth_service.has_token()
+        except Exception:
+            connected = False
+        self.tiktok_connection_label.setText("connected" if connected else "not connected")
+        if self.current_project is None:
+            self.tiktok_upload_status_label.setText("pending")
+            self.tiktok_remote_status_label.setText("-")
+            self.tiktok_publish_id_label.setText("-")
+            self.tiktok_upload_time_label.setText("-")
+            self.tiktok_check_time_label.setText("-")
+            self.tiktok_progress_label.setText("-")
+            self.tiktok_action_label.setText("-")
+            self._set_tiktok_controls_enabled(True)
+            return
+        self.current_project = self.project_service.load_project(self.current_project.path)
+        state = self.current_project.tiktok_upload or {}
+        status = str(state.get("status") or "pending")
+        publish_id = str(state.get("publish_id") or "-")
+        remote_status = str(state.get("remote_status") or "-")
+        self.tiktok_upload_status_label.setText(status)
+        self.tiktok_remote_status_label.setText(remote_status)
+        self.tiktok_publish_id_label.setText(publish_id)
+        self.tiktok_upload_time_label.setText(str(state.get("uploaded_at") or "-"))
+        self.tiktok_check_time_label.setText(str(state.get("last_checked_at") or "-"))
+        if state.get("last_error"):
+            self.tiktok_progress_label.setText(str(state.get("last_error")))
+        elif status == "action_required":
+            self.tiktok_progress_label.setText("TikTok upload completed.")
+        elif status == "uploaded":
+            self.tiktok_progress_label.setText("TikTok API requires action.")
+        else:
+            self.tiktok_progress_label.setText("-")
+        self.tiktok_action_label.setText("TikTok action required" if status == "action_required" else "-")
+        self.tiktok_connect_button.setEnabled(not active)
+        self.tiktok_disconnect_button.setEnabled(not active and connected)
+        self.tiktok_upload_button.setEnabled(not active and connected and not bool(state.get("publish_id")) and status not in {"uploading", "processing", "action_required", "uploaded"})
+        self.tiktok_retry_button.setEnabled(not active and connected and status == "failed" and not bool(state.get("publish_id")))
+        self.tiktok_check_button.setEnabled(not active and connected and bool(state.get("publish_id")))
+    def _set_tiktok_controls_enabled(self, enabled: bool) -> None:
+        if not hasattr(self, "tiktok_upload_button"):
+            return
+        self.tiktok_connect_button.setEnabled(enabled)
+        self.tiktok_upload_button.setEnabled(enabled)
+        self.tiktok_retry_button.setEnabled(enabled)
+        self.tiktok_check_button.setEnabled(enabled)
+        self.tiktok_disconnect_button.setEnabled(enabled)
     def create_compilation_video(self) -> None:
         selected_projects = self._selected_compilation_projects()
         if not selected_projects:
-            QMessageBox.warning(self, "総集編作成エラー", "総集編に使う動画を選択してください。")
+            QMessageBox.warning(self, "Compilation", "Select projects to compile.")
             return
         intro_path = self.compilation_service.first_asset(self.paths.intro_dir) if self.settings.intro_enabled else None
         ending_path = self.compilation_service.first_asset(self.paths.ending_dir) if self.settings.ending_enabled else None
@@ -2113,11 +2545,10 @@ class MainWindow(QMainWindow):
             bgm_path=bgm_path,
         )
         if not result.success:
-            QMessageBox.warning(self, "総集編作成エラー", result.message)
+            QMessageBox.warning(self, "Compilation Error", result.message)
             return
         self.status_label.setText(result.message)
-        QMessageBox.information(self, "総集編作成", f"総集編を作成しました。\n{result.output_path}")
-
+        QMessageBox.information(self, "Compilation", f"Created compilation.\n{result.output_path}")
     def _selected_compilation_projects(self) -> list[ProjectInfo]:
         selected_paths: list[str] = []
         for index in range(self.compilation_project_list.count()):
@@ -2126,7 +2557,6 @@ class MainWindow(QMainWindow):
                 selected_paths.append(str(item.data(Qt.UserRole)))
         projects_by_path = {str(project.path): project for project in self.projects}
         return [projects_by_path[path] for path in selected_paths if path in projects_by_path]
-
     def move_compilation_item(self, direction: int) -> None:
         current_row = self.compilation_project_list.currentRow()
         if current_row < 0:
@@ -2137,7 +2567,6 @@ class MainWindow(QMainWindow):
         item = self.compilation_project_list.takeItem(current_row)
         self.compilation_project_list.insertItem(next_row, item)
         self.compilation_project_list.setCurrentRow(next_row)
-
     def _compilation_output_name(self) -> str | None:
         genre = self.compilation_genre_box.currentText().strip()
         category = ""
@@ -2146,7 +2575,6 @@ class MainWindow(QMainWindow):
         if genre and category:
             return f"{genre}_{category}"
         return genre or None
-
     def _compilation_projects(self, genre: str, category: str = "") -> list[ProjectInfo]:
         return sorted(
             [
@@ -2158,73 +2586,63 @@ class MainWindow(QMainWindow):
             ],
             key=lambda project: (project.series, project.series_number, project.name),
         )
-
     def _duration_seconds(self, duration: str) -> float:
         match = re.search(r"\d+", duration or "")
         if not match:
             return 60.0
         value = float(match.group())
-        if "分" in duration:
+        if "?" in duration:
             return value * 60.0
         return value
-
     def save_youtube_tags(self) -> None:
         if self.current_project is None:
-            QMessageBox.warning(self, "YouTubeタグ保存エラー", "先にプロジェクトを作成または選択してください。")
+            QMessageBox.warning(self, "YouTube Tags", "Select a project first.")
             return
         tags = self.tag_service.youtube_tags_from_hashtags(self._current_hashtags_text())
         self.youtube_tags_input.setText(self.tag_service.youtube_text(tags))
         self.current_project = self.project_service.save_platform_tags(self.current_project, youtube_tags=tags)
         self.reload_projects()
-        self.status_label.setText("YouTubeタグを保存しました。")
-
+        self.status_label.setText("YouTube tags saved.")
     def save_tiktok_tags(self) -> None:
         if self.current_project is None:
-            QMessageBox.warning(self, "TikTokタグ保存エラー", "先にプロジェクトを作成または選択してください。")
+            QMessageBox.warning(self, "TikTok Tags", "Select a project first.")
             return
         tags = self.tag_service.tiktok_tags_from_hashtags(self._current_hashtags_text())
         self.tiktok_tags_input.setText(self.tag_service.tiktok_text(tags))
         self.current_project = self.project_service.save_platform_tags(self.current_project, tiktok_tags=tags)
         self.reload_projects()
-        self.status_label.setText("TikTokタグを保存しました。")
-
+        self.status_label.setText("TikTok tags saved.")
     def copy_theme_to_clipboard(self) -> None:
-        self._copy_text_to_clipboard(self.topic_input.text().strip(), "テーマ")
-
+        self._copy_text_to_clipboard(self.topic_input.text().strip(), "Theme")
     def save_topic_name(self) -> None:
         if self.current_project is None:
-            QMessageBox.warning(self, "テーマ保存エラー", "先にプロジェクトを作成または選択してください。")
+            QMessageBox.warning(self, "Memo", "Select a project first.")
             return
         topic = self.topic_input.text().strip()
         if not topic:
-            QMessageBox.warning(self, "テーマ保存エラー", "テーマを入力してください。")
+            QMessageBox.warning(self, "Memo", "Select a memo first.")
             return
         try:
             self.current_project = self.project_service.save_topic(self.current_project, topic)
         except ValueError as exc:
-            QMessageBox.warning(self, "テーマ保存エラー", str(exc))
+            QMessageBox.warning(self, "Memo Save Error", str(exc))
             return
         self.reload_projects()
-        self.status_label.setText("テーマ名を保存しました。")
-
+        self.status_label.setText("Memo saved.")
     def copy_youtube_tags_to_clipboard(self) -> None:
         self._copy_text_to_clipboard(self.youtube_tags_input.text().strip(), "YouTubeタグ")
-
     def copy_tiktok_tags_to_clipboard(self) -> None:
         self._copy_text_to_clipboard(self.tiktok_tags_input.text().strip(), "TikTokタグ")
-
     def copy_memo_to_clipboard(self, index: int) -> None:
         if index < 0 or index >= len(self.memo_edits):
             return
         self._copy_text_to_clipboard(self.memo_edits[index].toPlainText().strip(), f"メモ{index + 1}")
-
     def _copy_text_to_clipboard(self, text: str, label: str) -> None:
         if not text:
-            QMessageBox.warning(self, "コピーエラー", f"{label}が空です。")
+            QMessageBox.warning(self, "Copy", f"{label} is empty.")
             return
         QGuiApplication.clipboard().setText(text)
-        self.status_label.setText(f"{label}をコピーしました。")
-
+        self.status_label.setText(f"{label} copied.")
     def load_memos(self) -> None:
         path = self._memos_path()
         if not path.exists():
@@ -2239,25 +2657,20 @@ class MainWindow(QMainWindow):
             memo_edit.blockSignals(True)
             memo_edit.setPlainText(str(values[index]) if index < len(values) else "")
             memo_edit.blockSignals(False)
-
     def save_memos(self) -> None:
         values = [memo.toPlainText() for memo in getattr(self, "memo_edits", [])]
         try:
             self._memos_path().write_text(json.dumps(values, ensure_ascii=False, indent=2), encoding="utf-8")
         except OSError:
             return
-
     def _memos_path(self) -> Path:
         return self.paths.base_dir / "memos.json"
-
     def not_implemented(self) -> None:
-        QMessageBox.information(self, "未実装", "この機能は後で実装します。今回は自動投稿しません。")
-
+        QMessageBox.information(self, "Open", "Open the target folder after selecting a project.")
     def update_progress_view(self) -> None:
         progress = self.current_project.progress if self.current_project else {}
         for name, check in self.progress_checks.items():
             check.setChecked(bool(progress.get(name, False)))
-
     def update_wizard(self) -> None:
         states = self._wizard_states()
         first_incomplete = next((index for index, done in enumerate(states) if not done), len(states) - 1)
@@ -2269,29 +2682,27 @@ class MainWindow(QMainWindow):
             else:
                 label.setStyleSheet("background:#252526; border:1px solid #3c3c3c; border-radius:4px; padding:6px;")
         self.update_action_highlights(first_incomplete)
-
     def _wizard_states(self) -> list[bool]:
         progress = self.current_project.progress if self.current_project else {}
         return [
             bool(self.topic_input.text().strip()),
             bool(self.current_project),
             bool(progress.get("台本")),
-            bool(progress.get("画像")),
+            bool(progress.get("??")),
             bool(progress.get("音声")),
             bool(progress.get("動画")),
             bool(progress.get("投稿")),
         ]
-
     def update_action_highlights(self, step_index: int) -> None:
         self._clear_action_highlights()
         instructions = [
-            "STEP1: テーマを入力してください。",
-            "STEP2: 「プロンプト生成」→「プロンプトをコピー」→「プロジェクト作成」の順に進めます。",
-            "STEP3: ChatGPTのJSON回答を「JSON回答貼り付け」へ貼り付けます。",
-            "STEP4: 「画像生成プロンプトをコピー」で画像を生成し、素材管理から画像を取り込みます。",
-            "STEP5: 「VOICEVOX音声生成」を押します。",
-            "STEP6: 「FFmpeg動画生成」を押します。",
-            "STEP7: 投稿準備ができています。",
+            "STEP1: Enter a theme.",
+            "STEP2: Generate and copy a prompt, then use ChatGPT or Story Composer.",
+            "STEP3: Paste JSON and validate the result.",
+            "STEP4: Prepare images or image prompts.",
+            "STEP5: Generate VOICEVOX audio.",
+            "STEP6: Generate video with FFmpeg.",
+            "STEP7: Prepare upload.",
         ]
         if hasattr(self, "next_action_label"):
             self.next_action_label.setText(instructions[min(step_index, len(instructions) - 1)])
@@ -2325,7 +2736,6 @@ class MainWindow(QMainWindow):
             return
         if step_index == 6:
             self._highlight_buttons(["post"])
-
     def _clear_action_highlights(self) -> None:
         for button in getattr(self, "action_buttons", {}).values():
             button.setStyleSheet("")
@@ -2337,19 +2747,15 @@ class MainWindow(QMainWindow):
             widget = getattr(self, widget_name, None)
             if widget:
                 widget.setStyleSheet("")
-
     def _highlight_buttons(self, keys: list[str]) -> None:
         for key in keys:
             button = self.action_buttons.get(key)
             if button:
                 button.setStyleSheet(self._highlight_button_style())
-
     def _highlight_button_style(self) -> str:
         return "background:#0e639c; border:2px solid #ffd166; color:#ffffff; font-weight:700;"
-
     def _highlight_field_style(self) -> str:
         return "background:#252526; color:#ffffff; border:2px solid #ffd166; border-radius:4px; padding:6px;"
-
     def update_asset_list(self) -> None:
         self.asset_list.clear()
         if self.current_project is None:
@@ -2360,23 +2766,21 @@ class MainWindow(QMainWindow):
             item.setData(Qt.UserRole, str(path))
             self.asset_list.addItem(item)
         self.update_image_thumbnail_list()
-
     def select_images_for_import(self) -> None:
         if self.current_project is None:
-            QMessageBox.warning(self, "画像取り込みエラー", "先にプロジェクトを作成、または選択してください。")
+            QMessageBox.warning(self, "Image Import", "Select a project first.")
             return
         files, _selected_filter = QFileDialog.getOpenFileNames(
             self,
-            "取り込む画像を選択",
+            "Select Images",
             str(self.current_project.path),
             "画像ファイル (*.png *.jpg *.jpeg *.webp)",
         )
         if files:
             self.import_image_files([Path(file) for file in files])
-
     def import_image_files(self, files: list[Path]) -> None:
         if self.current_project is None:
-            QMessageBox.warning(self, "画像取り込みエラー", "先にプロジェクトを作成、または選択してください。")
+            QMessageBox.warning(self, "Image Import", "Select image files first.")
             return
         mode = self._confirm_image_import_mode()
         if mode is None:
@@ -2387,15 +2791,14 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "画像取り込みエラー", str(exc))
             return
         self._refresh_after_image_change()
-        self.status_label.setText(f"{len(imported)}枚の画像を取り込みました。")
-
+        self.status_label.setText(f"Imported {len(imported)} images.")
     def paste_images_from_clipboard(self) -> None:
         if self.current_project is None:
-            QMessageBox.warning(self, "画像貼り付けエラー", "先にプロジェクトを作成、または選択してください。")
+            QMessageBox.warning(self, "Image Paste", "Select a project first.")
             return
         mime_data = QGuiApplication.clipboard().mimeData()
         if not mime_data.hasUrls() and not mime_data.hasImage():
-            QMessageBox.warning(self, "画像貼り付けエラー", "クリップボードに画像がありません。")
+            QMessageBox.warning(self, "Image Paste", "Clipboard has no image.")
             return
         mode = self._confirm_image_import_mode()
         if mode is None:
@@ -2404,7 +2807,7 @@ class MainWindow(QMainWindow):
             if mime_data.hasUrls():
                 files = [Path(url.toLocalFile()) for url in mime_data.urls() if url.isLocalFile()]
                 if not files:
-                    QMessageBox.warning(self, "画像貼り付けエラー", "クリップボードに画像がありません。")
+                    QMessageBox.warning(self, "Image Paste", "Clipboard image is empty.")
                     return
                 imported = self.image_import_service.import_files(self.current_project.path, files, mode)
                 count = len(imported)
@@ -2413,14 +2816,13 @@ class MainWindow(QMainWindow):
                 self.image_import_service.import_qimage(self.current_project.path, image, mode)
                 count = 1
             else:
-                QMessageBox.warning(self, "画像貼り付けエラー", "クリップボードに画像がありません。")
+                QMessageBox.warning(self, "Image Paste", "Clipboard image is empty.")
                 return
         except ImageImportError as exc:
             QMessageBox.warning(self, "画像貼り付けエラー", str(exc))
             return
         self._refresh_after_image_change()
-        self.status_label.setText(f"{count}枚の画像を貼り付けました。")
-
+        self.status_label.setText(f"Pasted {count} images.")
     def _confirm_image_import_mode(self) -> str | None:
         if self.current_project is None:
             return None
@@ -2428,8 +2830,8 @@ class MainWindow(QMainWindow):
             return "add"
         message = QMessageBox(self)
         message.setWindowTitle("画像取り込み")
-        message.setText("既存画像があります。上書きしますか？")
-        overwrite_button = message.addButton("上書きする", QMessageBox.AcceptRole)
+        message.setText("Images already exist. Choose how to import.")
+        overwrite_button = message.addButton("Overwrite", QMessageBox.AcceptRole)
         add_button = message.addButton("追加する", QMessageBox.ActionRole)
         cancel_button = message.addButton("キャンセル", QMessageBox.RejectRole)
         message.exec()
@@ -2441,7 +2843,6 @@ class MainWindow(QMainWindow):
         if clicked == cancel_button:
             return None
         return None
-
     def update_image_thumbnail_list(self) -> None:
         while self.image_thumbnail_layout.count() > 1:
             item = self.image_thumbnail_layout.takeAt(0)
@@ -2458,7 +2859,6 @@ class MainWindow(QMainWindow):
                 self.image_thumbnail_layout.count() - 1,
                 self._image_thumbnail_row(image_path, motion),
             )
-
     def _image_thumbnail_row(self, image_path: Path, motion: str = "") -> QWidget:
         row = QFrame()
         row.setFrameShape(QFrame.StyledPanel)
@@ -2470,11 +2870,9 @@ class MainWindow(QMainWindow):
             preview.setPixmap(pixmap.scaled(preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
         preview.setAlignment(Qt.AlignCenter)
         layout.addWidget(preview)
-
         name_label = QLabel(f"{image_path.name}\n{motion or 'Static'}")
         name_label.setMinimumWidth(90)
         layout.addWidget(name_label)
-
         up_button = QPushButton("上へ")
         up_button.clicked.connect(lambda _checked=False, path=image_path: self.move_imported_image(path, -1))
         down_button = QPushButton("下へ")
@@ -2486,25 +2884,22 @@ class MainWindow(QMainWindow):
         layout.addWidget(delete_button)
         layout.addStretch()
         return row
-
     def move_imported_image(self, image_path: Path, direction: int) -> None:
         try:
             self.image_import_service.move_image(image_path, direction)
         except OSError as exc:
-            QMessageBox.warning(self, "画像順番変更エラー", f"画像の順番変更に失敗しました。\n{exc}")
+            QMessageBox.warning(self, "Image Order Error", f"Failed to change image order.\n{exc}")
             return
         self._refresh_after_image_change()
-        self.status_label.setText("画像の順番を変更しました。")
-
+        self.status_label.setText("Image order changed.")
     def delete_imported_image(self, image_path: Path) -> None:
         try:
             self.image_import_service.delete_image(image_path)
         except OSError as exc:
-            QMessageBox.warning(self, "画像削除エラー", f"画像の削除に失敗しました。\n{exc}")
+            QMessageBox.warning(self, "Image Delete Error", f"Failed to delete image.\n{exc}")
             return
         self._refresh_after_image_change()
-        self.status_label.setText(f"{image_path.name} を削除しました。")
-
+        self.status_label.setText(f"{image_path.name} deleted.")
     def _refresh_after_image_change(self) -> None:
         if self.current_project is None:
             return
@@ -2514,7 +2909,6 @@ class MainWindow(QMainWindow):
         self.update_image_prompt_list()
         self.update_wizard()
         self.reload_projects()
-
     def update_image_prompt_list(self) -> None:
         while self.image_prompt_layout.count() > 1:
             item = self.image_prompt_layout.takeAt(0)
@@ -2525,13 +2919,12 @@ class MainWindow(QMainWindow):
             return
         for index, prompt, generated in self.project_service.image_prompt_items(self.current_project):
             self.image_prompt_layout.insertWidget(self.image_prompt_layout.count() - 1, self._image_prompt_row(index, prompt, generated))
-
     def _image_prompt_row(self, index: int, prompt: str, generated: bool) -> QWidget:
         row = QFrame()
         row.setFrameShape(QFrame.StyledPanel)
         layout = QVBoxLayout(row)
-        status = "生成済" if generated else "未生成"
-        title = QLabel(f"画像{index}    {status}")
+        status = "generated" if generated else "pending"
+        title = QLabel(f"Image {index:03d}    {status}")
         title.setStyleSheet("font-weight: 700; color: #9cdcfe;")
         layout.addWidget(title)
         prompt_box = QTextEdit()
@@ -2540,11 +2933,11 @@ class MainWindow(QMainWindow):
         prompt_box.setFixedHeight(90)
         layout.addWidget(prompt_box)
         buttons = QHBoxLayout()
-        copy_button = QPushButton("コピー")
+        copy_button = QPushButton("Copy")
         copy_button.clicked.connect(lambda _checked=False, text=prompt: QGuiApplication.clipboard().setText(text))
-        open_button = QPushButton("画像フォルダを開く")
+        open_button = QPushButton("Open Folder")
         open_button.clicked.connect(lambda _checked=False: self.open_project_folder("images"))
-        mark_button = QPushButton("生成済みにする")
+        mark_button = QPushButton("Mark Generated")
         mark_button.clicked.connect(lambda _checked=False, i=index: self.mark_image_generated(i))
         buttons.addWidget(copy_button)
         buttons.addWidget(open_button)
@@ -2552,7 +2945,6 @@ class MainWindow(QMainWindow):
         buttons.addStretch()
         layout.addLayout(buttons)
         return row
-
     def mark_image_generated(self, index: int) -> None:
         if self.current_project is None:
             return
@@ -2562,42 +2954,375 @@ class MainWindow(QMainWindow):
         self.update_asset_list()
         self.update_image_prompt_list()
         self.update_wizard()
-        self.status_label.setText(f"{path.name} を生成済みとして作成しました。実画像に差し替えてください。")
+        self.status_label.setText(f"{path.name} marked as generated.")
 
+    def update_image_generation_view(self) -> None:
+        if not hasattr(self, "image_generation_provider_label"):
+            return
+        settings = self.image_generation_settings()
+        self.image_generation_provider_label.setText(settings.provider)
+        self.image_generation_model_label.setText(settings.model)
+        self.image_generation_steps_label.setText(str(settings.steps))
+        self.image_generation_current_label.setText("-")
+        if self.current_project is None:
+            self.image_generation_config_label.setText("Not configured")
+            self.image_generation_counts_label.setText("-")
+            self.image_generation_status_label.setText("pending")
+            self.image_generation_usage_label.setText("-")
+            self.image_generation_error_label.setText("-")
+            self.refresh_prompt_template_options()
+            self.update_image_generation_prompt_preview()
+            self._set_image_generation_controls_enabled(self.image_generation_thread is None)
+            return
+        try:
+            provider_status = self.image_generation_service.provider_status()
+            summary = self.image_generation_service.summarize_project(self.current_project, settings)
+        except Exception as exc:
+            self.image_generation_config_label.setText("Not configured")
+            self.image_generation_error_label.setText(str(exc))
+            self._set_image_generation_controls_enabled(self.image_generation_thread is None)
+            return
+        configured = bool(provider_status.get("configured"))
+        self.image_generation_config_label.setText("Configured" if configured else "Not configured")
+        self.image_generation_provider_label.setText(settings.provider)
+        raw_state = getattr(self.current_project, "image_generation", {})
+        state = raw_state if isinstance(raw_state, dict) else {}
+        status = str(state.get("status") or "pending")
+        generated_count = len(state.get("generated_indices", []) or [])
+        required = int(summary.get("required_count") or self.current_project.image_count)
+        existing = len(summary.get("existing_indices", []) or [])
+        missing = len(summary.get("missing_indices", []) or [])
+        prompts = int(summary.get("prompt_count") or 0)
+        self.image_generation_counts_label.setText(
+            f"required {required} / existing {existing} / generated {generated_count} / missing {missing} / prompts {prompts}"
+        )
+        self.image_generation_status_label.setText(status)
+        self.image_generation_current_label.setText(str(state.get("current_index") or "-"))
+        estimate = summary.get("estimate")
+        usage = summary.get("usage")
+        usage_text = "-"
+        if estimate is not None:
+            neurons = getattr(estimate, "estimated_neurons", None)
+            usage_text = "estimate unknown" if neurons is None else f"estimate {neurons:.1f} Neurons"
+        if isinstance(usage, dict):
+            usage_text = (
+                f"daily {usage.get('daily_count', 0)} / project {usage.get('project_count', 0)} / {usage_text}"
+            )
+        self.image_generation_usage_label.setText(usage_text)
+        self.image_generation_error_label.setText(str(state.get("last_error") or "-"))
+        self.image_generation_portrait_label.setText(
+            "Portrait: flux-1-schnell does not guarantee exact 9:16; renderer crop/fit is used."
+        )
+        self.refresh_prompt_template_options()
+        self.update_image_generation_prompt_preview()
+        self._set_image_generation_controls_enabled(self.image_generation_thread is None)
+
+    def refresh_prompt_template_options(self) -> None:
+        if not hasattr(self, "prompt_template_box"):
+            return
+        service = getattr(self.image_generation_service, "prompt_library_service", None)
+        state = self.current_project.image_generation if self.current_project is not None else {}
+        if not isinstance(state, dict):
+            state = {}
+        mode = str(state.get("prompt_template_mode") or getattr(self.settings, "image_prompt_template_mode", "auto"))
+        mode = "manual" if mode == "manual" else "auto"
+        manual = str(
+            state.get("manual_prompt_template")
+            or state.get("prompt_template")
+            or getattr(self.settings, "image_manual_prompt_template", "generic_space")
+            or "generic_space"
+        )
+        self._updating_prompt_template_ui = True
+        try:
+            with QSignalBlocker(self.prompt_template_mode_box), QSignalBlocker(self.prompt_template_box):
+                self.prompt_template_mode_box.setCurrentText("Manual" if mode == "manual" else "Auto")
+                current_ids = [self.prompt_template_box.itemData(index) for index in range(self.prompt_template_box.count())]
+                templates = service.list_templates() if service is not None else []
+                template_ids = [template.id for template in templates]
+                if current_ids != template_ids:
+                    self.prompt_template_box.clear()
+                    for template in templates:
+                        self.prompt_template_box.addItem(template.name, template.id)
+                target = manual if manual in template_ids else "generic_space"
+                target_index = self.prompt_template_box.findData(target)
+                if target_index >= 0:
+                    self.prompt_template_box.setCurrentIndex(target_index)
+                self.prompt_template_box.setEnabled(mode == "manual")
+        finally:
+            self._updating_prompt_template_ui = False
+    def on_prompt_template_changed(self, _value: str = "") -> None:
+        if getattr(self, "_updating_prompt_template_ui", False):
+            return
+        mode = self.current_prompt_template_mode()
+        manual_template = self.current_manual_prompt_template()
+        if hasattr(self, "prompt_template_box"):
+            self.prompt_template_box.setEnabled(mode == "manual")
+        if self.current_project is not None:
+            state = dict(self.current_project.image_generation or {})
+            state["prompt_template_mode"] = mode
+            state["manual_prompt_template"] = manual_template if mode == "manual" else None
+            if mode == "manual":
+                state["resolved_prompt_template"] = manual_template or "generic_space"
+            self.project_service.update_metadata(self.current_project.path, {"image_generation": state})
+            self.current_project = self.project_service.load_project(self.current_project.path)
+        self.update_image_generation_prompt_preview()
+    def current_prompt_template_mode(self) -> str:
+        if not hasattr(self, "prompt_template_mode_box"):
+            return str(getattr(self.settings, "image_prompt_template_mode", "auto"))
+        return "manual" if self.prompt_template_mode_box.currentText().casefold() == "manual" else "auto"
+
+    def current_manual_prompt_template(self) -> str | None:
+        if not hasattr(self, "prompt_template_box"):
+            return str(getattr(self.settings, "image_manual_prompt_template", "generic_space") or "generic_space")
+        data = self.prompt_template_box.currentData()
+        if data:
+            return str(data)
+        text = self.prompt_template_box.currentText().strip()
+        return text or "generic_space"
+
+    def reload_prompt_templates(self) -> None:
+        service = getattr(self.image_generation_service, "prompt_library_service", None)
+        if service is None:
+            self.status_label.setText("Prompt templates are not available.")
+            return
+        service.reload()
+        self.refresh_prompt_template_options()
+        self.update_image_generation_prompt_preview()
+        self.status_label.setText("Prompt templates reloaded.")
+
+    def image_generation_settings(self) -> ImageGenerationSettings:
+        s = self.settings
+        mode = self.current_prompt_template_mode()
+        template = self.current_manual_prompt_template()
+        return ImageGenerationSettings(
+            provider=s.image_generation_provider,
+            model=s.image_generation_model,
+            steps=s.image_generation_steps,
+            max_images_per_run=s.image_generation_max_images_per_run,
+            max_retries_per_image=s.image_generation_max_retries_per_image,
+            daily_request_limit=s.image_generation_daily_request_limit,
+            per_project_image_limit=s.image_generation_project_limit,
+            prompt_optimizer_enabled=self.prompt_optimizer_check.isChecked() if hasattr(self, "prompt_optimizer_check") else True,
+            prompt_template_mode=mode,
+            manual_prompt_template=template or None,
+            target_width=s.output_width,
+            target_height=s.output_height,
+        )
+
+    def update_image_generation_prompt_preview(self) -> None:
+        if self.current_project is None:
+            if hasattr(self, "prompt_original_edit"):
+                self.prompt_original_edit.clear()
+            if hasattr(self, "prompt_optimized_edit"):
+                self.prompt_optimized_edit.clear()
+            if hasattr(self, "prompt_template_resolved_label"):
+                self.prompt_template_resolved_label.setText("-")
+            if hasattr(self, "prompt_template_version_label"):
+                self.prompt_template_version_label.setText("-")
+            if hasattr(self, "prompt_template_keywords_label"):
+                self.prompt_template_keywords_label.setText("-")
+            if hasattr(self, "prompt_template_sources_label"):
+                self.prompt_template_sources_label.setText("-")
+            if hasattr(self, "prompt_template_scene_label"):
+                self.prompt_template_scene_label.setText("-")
+            if hasattr(self, "prompt_template_warnings_label"):
+                self.prompt_template_warnings_label.setText("-")
+            if hasattr(self, "prompt_rules_label"):
+                self.prompt_rules_label.setText("-")
+            if hasattr(self, "prompt_length_label"):
+                self.prompt_length_label.setText("-")
+            return
+
+        try:
+            settings = self.image_generation_settings()
+            index = self.prompt_scene_box.value()
+            prompts = self.image_generation_service.load_prompts(self.current_project)
+            if not prompts or index < 1 or index > len(prompts):
+                return
+            prompt = prompts[index - 1]
+            result = self.image_generation_service.build_prompt_optimization(
+                prompt,
+                index,
+                settings,
+                self.current_project,
+                prompts,
+            )
+            self.prompt_original_edit.setText(prompt)
+            self.prompt_optimized_edit.setText(result.optimized_prompt)
+            self.prompt_template_resolved_label.setText(result.selected_template or "-")
+            self.prompt_template_version_label.setText(result.template_version or "-")
+            self.prompt_template_keywords_label.setText(", ".join(result.detected_keywords) if result.detected_keywords else "-")
+            self.prompt_template_sources_label.setText(", ".join(result.matched_sources) if result.matched_sources else "-")
+            self.prompt_template_scene_label.setText(result.selected_scene or "-")
+            self.prompt_template_warnings_label.setText(", ".join(result.warnings) if result.warnings else "-")
+            rules_str = f"Applied: {len(result.applied_rules)}, Skipped: {len(result.skipped_rules)}"
+            self.prompt_rules_label.setText(rules_str)
+            self.prompt_length_label.setText(f"{result.optimized_length} / {result.max_prompt_length} chars")
+        except Exception as exc:
+            self.prompt_original_edit.setText("")
+            self.prompt_optimized_edit.setText(f"Error: {exc}")
+
+    def copy_optimized_prompt(self) -> None:
+        if hasattr(self, "prompt_optimized_edit"):
+            text = self.prompt_optimized_edit.toPlainText().strip()
+            self._copy_text_to_clipboard(text, "Optimized Prompt")
+
+    def cancel_image_generation(self) -> None:
+        if self.image_generation_worker:
+            self.image_generation_worker.cancel()
+            self.status_label.setText("Image Generation: cancelling...")
+
+    def generate_missing_images(self) -> None:
+        self._start_image_generation(retry_failed=False)
+
+    def retry_failed_images(self) -> None:
+        self._start_image_generation(retry_failed=True)
+
+    def _start_image_generation(self, retry_failed: bool = False) -> None:
+        if self.current_project is None:
+            QMessageBox.warning(self, "Image Generation", "Select a project first.")
+            return
+        if self.image_generation_thread is not None:
+            QMessageBox.information(self, "Image Generation", "Image generation is already running.")
+            return
+        settings = self.image_generation_settings()
+        try:
+            summary = self.image_generation_service.summarize_project(self.current_project, settings)
+        except Exception as exc:
+            QMessageBox.warning(self, "Image Generation", str(exc))
+            return
+        if retry_failed:
+            indices = [int(index) for index in summary.get("failed_indices", []) if str(index).isdigit()]
+            action = "Retry failed images"
+        else:
+            indices = [int(index) for index in summary.get("missing_indices", [])]
+            action = "Generate missing images"
+        if not indices:
+            QMessageBox.information(self, "Image Generation", "There are no target images to generate.")
+            self.update_image_generation_view()
+            return
+        prompt_details = self._image_generation_prompt_details(indices, settings)
+        estimate = summary.get("estimate")
+        usage_text = "-"
+        if estimate is not None:
+            neurons = getattr(estimate, "estimated_neurons", None)
+            usage_text = "unknown" if neurons is None else f"{neurons:.1f} Neurons"
+        message = (
+            f"Provider: {settings.provider}\n"
+            f"Model: {settings.model}\n"
+            f"Steps: {settings.steps}\n"
+            f"{action}: {len(indices)} images\n"
+            f"Estimated usage: {usage_text}\n\n"
+            "Cloudflare Workers AI usage is consumed even inside the free allocation.\n"
+            "Valid existing images will not be overwritten.\n\n"
+            "Final prompts sent to the API:\n"
+            f"{prompt_details}"
+        )
+        if QMessageBox.question(self, "Image Generation", message) != QMessageBox.Yes:
+            return
+        self._set_image_generation_controls_enabled(False)
+        self.image_generation_status_label.setText("starting")
+        self.image_generation_thread = QThread(self)
+        self.image_generation_worker = ImageGenerationWorker(
+            self.image_generation_service,
+            self.current_project,
+            settings,
+            retry_failed=retry_failed,
+        )
+        self.image_generation_project_path = self.current_project.path
+        self.image_generation_worker.moveToThread(self.image_generation_thread)
+        self.image_generation_thread.started.connect(self.image_generation_worker.run)
+        self.image_generation_worker.progress.connect(self.on_image_generation_progress)
+        self.image_generation_worker.finished.connect(self.image_generation_thread.quit)
+        self.image_generation_worker.failed.connect(self.image_generation_thread.quit)
+        self.image_generation_worker.finished.connect(self.on_image_generation_finished)
+        self.image_generation_worker.failed.connect(self.on_image_generation_failed)
+        self.image_generation_thread.finished.connect(self.image_generation_worker.deleteLater)
+        self.image_generation_thread.finished.connect(self.image_generation_thread.deleteLater)
+        self.image_generation_thread.finished.connect(self._clear_image_generation_worker)
+        self.image_generation_thread.start()
+
+    def _image_generation_prompt_details(self, indices: list[int], settings: ImageGenerationSettings) -> str:
+        if self.current_project is None:
+            return "-"
+        prompts = self.image_generation_service.load_prompts(self.current_project)
+        details: list[str] = []
+        for index in indices:
+            if index < 1 or index > len(prompts):
+                details.append(f"Image {index}: prompt missing")
+                continue
+            try:
+                result = self.image_generation_service.build_prompt_optimization(
+                    prompts[index - 1],
+                    index,
+                    settings,
+                    self.current_project,
+                    prompts,
+                )
+            except ImageGenerationError as exc:
+                details.append(f"Image {index}: {exc}")
+                continue
+            details.append(
+                f"Image {index} template={result.selected_template or '-'} scene={result.selected_scene or '-'} "
+                f"({result.optimized_length}/{result.max_prompt_length} chars)\n{result.optimized_prompt}"
+            )
+        return "\n\n---\n\n".join(details)
+
+    def on_image_generation_progress(self, event: dict) -> None:
+        self.image_generation_status_label.setText(str(event.get("status") or "generating"))
+        self.image_generation_current_label.setText(str(event.get("current_index") or "-"))
+        if event.get("message"):
+            self.status_label.setText(str(event.get("message")))
+    def on_image_generation_finished(self, result: dict) -> None:
+        if self.image_generation_project_path and self.image_generation_project_path.exists():
+            self.current_project = self.project_service.load_project(self.image_generation_project_path)
+        self.update_image_generation_view()
+        self._refresh_after_image_change()
+        self.status_label.setText(f"Image Generation: {result.get('status')}")
+    def on_image_generation_failed(self, message: str) -> None:
+        if self.image_generation_project_path and self.image_generation_project_path.exists():
+            self.current_project = self.project_service.load_project(self.image_generation_project_path)
+        self.update_image_generation_view()
+        QMessageBox.warning(self, "Image Generation", message)
+    def _clear_image_generation_worker(self) -> None:
+        self.image_generation_thread = None
+        self.image_generation_worker = None
+        self.image_generation_project_path = None
+        self.update_image_generation_view()
+    def _set_image_generation_controls_enabled(self, enabled: bool) -> None:
+        if not hasattr(self, "generate_missing_images_button"):
+            return
+        self.generate_missing_images_button.setEnabled(enabled)
+        self.retry_failed_images_button.setEnabled(enabled)
+        self.cancel_image_generation_button.setEnabled(not enabled)
     def update_video_preview(self) -> None:
         if not MULTIMEDIA_AVAILABLE or self.current_project is None or self.media_player is None:
             return
         final_video = self.current_project.path / "video" / "final.mp4"
         if final_video.exists():
             self.media_player.setSource(QUrl.fromLocalFile(str(final_video)))
-
     def play_video(self) -> None:
         if self.media_player:
             self.update_video_preview()
             self.media_player.play()
-
     def pause_video(self) -> None:
         if self.media_player:
             self.media_player.pause()
-
     def rewind_video(self) -> None:
         if self.media_player:
             self.media_player.setPosition(0)
-
     def open_asset_folder(self, item: QListWidgetItem) -> None:
         self.project_service.open_folder(Path(item.data(Qt.UserRole)))
-
     def open_project_folder(self, folder_name: str) -> None:
         if self.current_project is None:
-            QMessageBox.warning(self, "フォルダエラー", "先にプロジェクトを作成または選択してください。")
+            QMessageBox.warning(self, "Folder", "Select a project first.")
             return
         target = self.current_project.path / folder_name if folder_name else self.current_project.path
         self.project_service.open_folder(target)
-
     def add_topic(self) -> None:
         topic = self.topic_edit.text().strip()
         if not topic:
-            QMessageBox.warning(self, "ネタ管理エラー", "追加するテーマを入力してください。")
+            QMessageBox.warning(self, "Topic", "Enter a topic first.")
             return
         if topic not in self.topics:
             self.topics.append(topic)
@@ -2605,36 +3330,32 @@ class MainWindow(QMainWindow):
         self.refresh_topic_list()
         self.refresh_completer()
         self.topic_edit.clear()
-
     def update_topic(self) -> None:
         selected = self.topic_list.currentItem()
         new_topic = self.topic_edit.text().strip()
         if selected is None or not new_topic:
-            QMessageBox.warning(self, "ネタ管理エラー", "編集するテーマを選び、新しい内容を入力してください。")
+            QMessageBox.warning(self, "Topic", "Select a topic to edit.")
             return
         old_topic = selected.text()
         self.topics = [new_topic if topic == old_topic else topic for topic in self.topics]
         self.topic_service.save(self.topics)
         self.refresh_topic_list()
         self.refresh_completer()
-
     def delete_topic(self) -> None:
         selected = self.topic_list.currentItem()
         if selected is None:
-            QMessageBox.warning(self, "ネタ管理エラー", "削除するテーマを選択してください。")
+            QMessageBox.warning(self, "Topic", "Select a topic to delete.")
             return
         self.topics = [topic for topic in self.topics if topic != selected.text()]
         self.topic_service.save(self.topics)
         self.refresh_topic_list()
         self.refresh_completer()
         self.topic_edit.clear()
-
     def use_selected_topic(self, item: QListWidgetItem) -> None:
         self.topic_input.setText(item.text())
         self.topic_edit.setText(item.text())
         self.main_tabs.setCurrentIndex(1)
         self.update_wizard()
-
     def open_settings(self) -> None:
         dialog = SettingsDialog(self.settings, self.paths, self)
         if dialog.exec() != SettingsDialog.Accepted:
@@ -2643,18 +3364,18 @@ class MainWindow(QMainWindow):
         try:
             self.settings_service.save(self.settings)
         except OSError as exc:
-            QMessageBox.critical(self, "設定エラー", f"設定の保存に失敗しました。\n{exc}")
+            QMessageBox.critical(self, "Settings Error", f"Failed to save settings.\n{exc}")
             return
         self.voicevox_service = VoicevoxService(self.settings.voicevox_url, self.settings.voicevox_speaker_id)
         self.video_render_service = VideoRenderService(create_video_editor(self.settings.video_editor_engine, self.settings.ffmpeg_path), self.settings)
         self.compilation_service = CompilationService(self.settings.ffmpeg_path, self.settings.output_width, self.settings.output_height)
-        QMessageBox.information(self, "設定保存", "設定を保存しました。")
+        self.story_composer_widget.apply_settings(self.settings)
+        QMessageBox.information(self, "Settings", "Settings saved.")
         self.apply_settings_to_ui()
-
     def _read_form_values(self) -> tuple[str, str, str, str, str, int, list[str]] | None:
         topic = self.topic_input.text().strip()
         if not topic:
-            QMessageBox.warning(self, "入力エラー", "テーマを入力してください。")
+            QMessageBox.warning(self, "Input Error", "Enter a theme first.")
             return None
         return (
             topic,
@@ -2665,36 +3386,34 @@ class MainWindow(QMainWindow):
             int(self.image_count_box.currentText()),
             self._parse_tags(),
         )
-
     def ensure_category_registered(self, genre: str, category: str) -> None:
         if not genre.strip() or not category.strip():
             return
         if category in self.categories_by_genre.get(genre, []):
             return
-        if QMessageBox.question(self, "カテゴリ追加", f"「{category}」を「{genre}」のカテゴリ一覧へ追加しますか？") == QMessageBox.Yes:
+        if QMessageBox.question(self, "Add Category", f"Add {category} to {genre} categories?") == QMessageBox.Yes:
             self.categories_by_genre = self.category_service.add_category(genre, category, self.categories_by_genre)
             self.category_service.save(self.categories_by_genre)
             self.refresh_category_ui()
-
     def bulk_update_selected_projects(self) -> None:
         selected_paths = [Path(item.data(Qt.UserRole)) for item in self.project_list.selectedItems()]
         if not selected_paths:
-            QMessageBox.warning(self, "一括変更", "変更するプロジェクトを選択してください。")
+            QMessageBox.warning(self, "Bulk Change", "Select projects to change.")
             return
         selected_projects = [project for project in self.projects if project.path in selected_paths]
         genre = self.category_manage_genre_box.currentText() or self.genre_box.currentText()
         selected_category = self.category_manage_list.currentItem()
         category = selected_category.text() if selected_category else self.category_box.currentText().strip()
-        series, ok = QInputDialog.getText(self, "一括カテゴリ変更", "シリーズ名（空欄なら変更しません）")
+        series, ok = QInputDialog.getText(self, "Bulk Series", "Series name (leave empty to keep current)")
         if not ok:
             return
-        tag_text, ok = QInputDialog.getText(self, "一括タグ変更", "追加タグ（カンマ区切り、空欄可）")
+        tag_text, ok = QInputDialog.getText(self, "Bulk Tags", "Tags to add (comma separated, optional)")
         if not ok:
             return
-        remove_tag_text, ok = QInputDialog.getText(self, "一括タグ削除", "削除タグ（カンマ区切り、空欄可）")
+        remove_tag_text, ok = QInputDialog.getText(self, "Remove Tags", "Tags to remove (comma separated, optional)")
         if not ok:
             return
-        if QMessageBox.question(self, "一括変更", f"{len(selected_projects)}件のジャンル/カテゴリ/シリーズ/タグを変更しますか？") != QMessageBox.Yes:
+        if QMessageBox.question(self, "Bulk Change", f"Update genre/category/series/tags for {len(selected_projects)} projects?") != QMessageBox.Yes:
             return
         add_tags = self.tag_service.parse_youtube_text(tag_text)
         remove_tags = self.tag_service.parse_youtube_text(remove_tag_text)
@@ -2707,15 +3426,12 @@ class MainWindow(QMainWindow):
             remove_tags=remove_tags,
         )
         self.reload_projects()
-        self.status_label.setText(f"{len(selected_projects)}件のカテゴリ情報を一括変更しました。")
-
+        self.status_label.setText(f"Updated category info for {len(selected_projects)} projects.")
     def _set_image_count(self, image_count: int) -> None:
         value = str(image_count if image_count in {3, 4, 5, 6, 8} else 5)
         self.image_count_box.setCurrentText(value)
-
     def _parse_tags(self) -> list[str]:
         return self.tag_service.parse_youtube_text(self.youtube_tags_input.text())
-
     def _load_platform_tag_fields(self) -> None:
         if self.current_project is None:
             return
@@ -2724,7 +3440,6 @@ class MainWindow(QMainWindow):
         tiktok_tags = self.current_project.tiktok_tags or self.tag_service.tiktok_tags_from_hashtags(hashtags_text)
         self.youtube_tags_input.setText(self.tag_service.youtube_text(youtube_tags))
         self.tiktok_tags_input.setText(self.tag_service.tiktok_text(tiktok_tags))
-
     def _current_hashtags_text(self) -> str:
         text = self.preview_hashtags.toPlainText().strip()
         if text:
@@ -2732,28 +3447,25 @@ class MainWindow(QMainWindow):
         if self.current_project is None:
             return ""
         return self._read_text(self.current_project.path / "hashtags.txt").strip()
-
     def _project_display_name(self, project: ProjectInfo) -> str:
         done_count = sum(1 for value in project.progress.values() if value)
         title = project.title or project.topic or project.name
         tags = f" #{' #'.join(project.tags[:3])}" if project.tags else ""
         series = f"{project.series}{project.series_number:03d}" if project.series else project.name
         category = project.category or UNCATEGORIZED
-        return f"{title}  [{done_count}/{len(PROGRESS_ITEMS)}]\n{project.genre or '未設定'} > {category}\n{series}{tags}"
-
+        return f"{title}  [{done_count}/{len(PROGRESS_ITEMS)}]\n{project.genre or 'Uncategorized'} > {category}\n{series}{tags}"
     def _project_tooltip(self, project: ProjectInfo) -> str:
         tags = ", ".join(project.tags) if project.tags else "-"
         return "\n".join(
             [
                 project.title or project.topic or project.name,
                 f"ジャンル: {project.genre or '-'}",
-                f"カテゴリ: {project.category or UNCATEGORIZED}",
+                f"Category: {project.category or UNCATEGORIZED}",
                 f"シリーズ: {project.series or '-'} #{project.series_number:03d}",
                 f"タグ: {tags}",
                 f"再生数: {project.analytics_views:,}",
             ]
         )
-
     def _read_text(self, path: Path) -> str:
         try:
             return path.read_text(encoding="utf-8")

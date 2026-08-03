@@ -21,7 +21,12 @@ class VideoRenderService:
             height=settings.output_height,
         )
 
-    def render_project(self, project: ProjectInfo) -> VideoEditResult:
+    def render_project(
+        self,
+        project: ProjectInfo,
+        subtitles_path: Path | None = None,
+        generate_subtitles: bool = True,
+    ) -> VideoEditResult:
         bgm_path = self._find_bgm_file(self._bgm_dir_for_project(project.path))
         branding_bgm_path = self._first_bgm_file(self._bgm_dir_for_project(project.path))
         intro_path = self._find_intro_file(self._intro_dir_for_project(project.path))
@@ -30,8 +35,9 @@ class VideoRenderService:
         needs_branding = intro_path is not None or ending_path is not None
         output_path = project.path / "video" / "final.mp4"
         body_output_path = project.path / "video" / "final_body.mp4"
-        subtitles_path = None
-        if self.settings.subtitles_enabled or self.settings.title_enabled:
+        if subtitles_path is not None and not subtitles_path.exists():
+            subtitles_path = None
+        if generate_subtitles and (self.settings.subtitles_enabled or self.settings.title_enabled):
             try:
                 subtitles_path = self.subtitle_service.generate_for_project(project.path, self.settings)
             except SubtitleError as exc:

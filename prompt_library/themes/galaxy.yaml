@@ -1,0 +1,30 @@
+id: galaxy
+name: Galaxy
+version: "1.0"
+extends: generic_space
+priority: 60
+keywords:
+  - galaxy
+  - galactic
+  - milky way
+  - 銀河
+  - 天の川
+quality:
+  required:
+    - realistic large-scale galactic structure
+  optional:
+    - subtle star field depth
+subject:
+  required:
+    - readable galaxy-scale structure
+negative:
+  default: []
+  theme_specific:
+    - no small solid object galaxy
+scientific_guidance:
+  required:
+    - avoid depicting a galaxy as a small solid object
+  optional:
+    - spiral or elliptical structure only when relevant
+scenes: []
+disabled_rules: []

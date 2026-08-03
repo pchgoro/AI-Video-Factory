@@ -1,0 +1,33 @@
+id: star
+name: Star
+version: "1.0"
+extends: generic_space
+priority: 80
+keywords:
+  - star
+  - stellar
+  - sun
+  - 太陽
+  - 恒星
+  - 赤色巨星
+  - 白色矮星
+  - 中性子星
+quality:
+  required:
+    - realistic stellar light
+  optional:
+    - glowing plasma detail when relevant
+subject:
+  required:
+    - believable stellar scale
+negative:
+  default: []
+  theme_specific:
+    - no cartoon flame texture
+scientific_guidance:
+  required:
+    - physically believable stellar surface when visible
+  optional:
+    - corona and plasma only when relevant
+scenes: []
+disabled_rules: []

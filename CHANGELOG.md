@@ -1,5 +1,88 @@
 # Changelog
 
+## v0.13.1
+- Gemini Story Providerを追加
+- `google-genai` SDK + Structured Outputsに対応
+- default Story ProviderをGeminiへ変更
+- `gemini-3.5-flash-lite` / `gemini-3.5-flash` / `gemini-3.6-flash` のmodel catalogを追加
+- Free-tier-only guardを追加し、Project Tier Free / Billing disabled確認を必須化
+- API key fingerprintによるGemini確認無効化に対応
+- Gemini local usage safety capとusage metricsを追加
+- Gemini固有のquota / rate limit / safety / finish reason分類を追加
+- Story Composer UIへGemini設定と課金リスク表示を追加
+
+## v0.13.0
+- Story AI Provider基盤を追加
+- OpenAI Responses API + Structured OutputsによるStory生成に対応
+- default modelを`gpt-5.6-luna`に設定し、Terra/Sol/Custom model IDを選択可能に変更
+- Mock Story ProviderとProvider Managerを追加
+- `story_generation.json`へ生成状態、retry、token metrics、料金推定snapshotを保存
+- 生成Storyを候補ファイルへ保存し、`Use Generated Story`で明示採用する流れを追加
+- Story ComposerへGenerate/Cancel/Retry/Resume/Preview/Use Generated Story UIを追加
+- `logs/story_provider.log`と`OPENAI_API_KEY`設定を追加
+
+## v0.12.0
+- Automated Production Orchestratorを追加
+- `production_run.json` にProductionRun / Step状態を保存
+- Step AdapterでStory Export、画像生成、VOICEVOX、字幕生成、動画render、YouTube/TikTok uploadを順番実行
+- Preflight / Dry Run / Resume / Retry / Cancelに対応
+- 既存成果物reuseとstale判定を追加
+- `.production.lock` による同一project二重Run防止を追加
+- Automated Production専用Widgetと `logs/production.log` を追加
+
+## v0.11.0
+- Story Composerを追加
+- Story / SceneモデルとStory JSON schemaを追加
+- ManualPromptProviderによる手動AI用Prompt生成を追加
+- story.json / story_manifest.json保存、Resume、Resetに対応
+- Story validationとExport Previewを追加
+- StoryFactoryAdapterで既存Factoryファイルへの明示Exportに対応
+- Export時のバックアップとcontent_source記録に対応
+- 既存ChatGPT取込、画像生成、VOICEVOX、render、YouTube/TikTok処理とは独立して動作
+
+## v0.10.2
+- Prompt Library + Theme Templatesを追加
+- YAMLテンプレートのschema検証、安全読み込み、単一継承mergeに対応
+- generic_space / black_hole / star / planet / galaxy / nebula / solar_system の初期templateを追加
+- project topic / title / category / genre / series / tags / image promptによるAuto theme判定を追加
+- Manual template選択、Resolved Template表示、Reload Templatesに対応
+- Prompt Optimizerへtemplate ruleとscene選択を統合
+- image_generation_manifest.jsonへtemplate判定・適用/skip情報を保存
+
+## v0.10.1
+- Image Prompt Optimizerを追加
+- Optimizer ON/OFFとpromptプレビューを追加
+- sceneごとの構図差別化と衝突回避に対応
+- Cloudflare prompt上限に合わせた段階的圧縮を追加
+- optimizer詳細をimage_generation_manifest.jsonへ保存
+
+## v0.10.0
+- Cloudflare Workers AIによる画像生成基盤を追加
+- `@cf/black-forest-labs/flux-1-schnell` で `image_prompts.txt` から不足画像を生成
+- `001.png` 形式でのatomic保存とmanifest保存に対応
+- 既存画像skip、retry、cancel、ローカル利用上限を追加
+- 素材管理に最小限のAI Image Generation UIを追加
+- OpenAI provider / OpenAI SDKは未実装
+
+## v0.9.0
+- TikTok OAuth v2 / Desktop Login Kit / PKCEに対応
+- TikTok Content Posting APIのUpload Contentに対応
+- 完成済み `final.mp4` のTikTok Inboxアップロードを追加
+- TikTok Status Fetchと `SEND_TO_USER_INBOX` 表示に対応
+- `tiktok_upload` 状態保存、duplicate prevention、retryを追加
+- `logs/tiktok.log` の専用ログを追加
+- 制作ウィザードに最小限のTikTok Upload UIを追加
+
+## v0.8.0
+- Job systemを追加
+- project.jsonへ制作状態とYouTube upload状態の永続化を追加
+- YouTube Data API v3 / OAuthによるPRIVATEアップロードを追加
+- resumable uploadと一時エラーretryに対応
+- YouTube video IDによる重複アップロード防止を追加
+- Windows Credential Managerを利用したrefresh token保存に対応
+- 制作ウィザードに最小限のYouTube Upload UIを追加
+- logs/youtube.log の専用ログを追加
+
 ## v0.7.4
 - ジャンル配下のカテゴリ管理を追加
 - プロジェクトへカテゴリ項目を追加

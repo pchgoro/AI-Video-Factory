@@ -1,0 +1,29 @@
+id: nebula
+name: Nebula
+version: "1.0"
+extends: generic_space
+priority: 50
+keywords:
+  - nebula
+  - nebulous
+  - 星雲
+  - ガス雲
+quality:
+  required:
+    - volumetric gas and dust
+  optional:
+    - soft luminous depth
+subject:
+  required:
+    - readable gas structure
+negative:
+  default: []
+  theme_specific:
+    - no flat painted smoke
+scientific_guidance:
+  required:
+    - gas and dust should feel volumetric
+  optional:
+    - star-forming regions only when relevant
+scenes: []
+disabled_rules: []

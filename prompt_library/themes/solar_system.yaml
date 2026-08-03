@@ -1,0 +1,30 @@
+id: solar_system
+name: Solar System
+version: "1.0"
+extends: generic_space
+priority: 90
+keywords:
+  - solar system
+  - 太陽系
+  - orbit
+  - 軌道
+  - planet orbit
+quality:
+  required:
+    - realistic orbital scale where possible
+  optional:
+    - clean documentary composition
+subject:
+  required:
+    - clear orbital relationship when present
+negative:
+  default: []
+  theme_specific:
+    - no unnaturally crowded planets unless requested
+scientific_guidance:
+  required:
+    - do not place all planets unnaturally close unless the original requests a diagram
+  optional:
+    - preserve realistic relative scale where possible
+scenes: []
+disabled_rules: []

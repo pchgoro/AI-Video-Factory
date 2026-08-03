@@ -1,0 +1,39 @@
+id: black_hole
+name: Black Hole
+version: "1.0"
+extends: generic_space
+priority: 100
+keywords:
+  - black hole
+  - ブラックホール
+  - event horizon
+  - 事象の地平面
+  - singularity
+  - 特異点
+quality:
+  required:
+    - ultra realistic astrophysics
+  optional:
+    - NASA-inspired realism
+subject:
+  required:
+    - readable silhouette of the main phenomenon
+negative:
+  default: []
+  theme_specific:
+    - no fantasy portal
+    - no decorative magic ring
+scientific_guidance:
+  required:
+    - physically plausible gravitational lensing when visible
+  optional:
+    - avoid depicting a black hole as a solid black planet
+scenes:
+  - id: close_up
+    camera:
+      - close-up of the event horizon region when present
+    lighting:
+      - strong rim light
+    short:
+      - close event horizon detail
+disabled_rules: []

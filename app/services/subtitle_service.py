@@ -136,6 +136,8 @@ class SubtitleService:
             
         # Border style is determined by title_bg_enabled checkbox
         title_border_style = 3 if settings.title_bg_enabled else 1
+        if title_border_style == 1:
+            title_outline = min(title_outline, 2)
             
         # Apply padding (custom padding adjusts box outline size if bg is enabled)
         padding = getattr(settings, "title_padding", 15)
