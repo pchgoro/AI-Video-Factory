@@ -1,5 +1,40 @@
 # AI Video Factory
 
+## Public Website for TikTok Developer Portal
+
+A minimal static public website is available in `website/` for TikTok Developer
+Portal Sandbox / Production review fields.
+
+Pages:
+
+- `/` - CosmicVideoFactory overview
+- `/terms` - Terms of Service
+- `/privacy` - Privacy Policy
+
+The site is bilingual Japanese/English, has no database, no external API, and
+no personal information form. It is independent from the desktop application.
+
+Local check:
+
+```powershell
+cd C:\Users\goroo\Desktop\CosmicVideoFactory\website
+python -m http.server 8080
+```
+
+Vercel deployment:
+
+```powershell
+cd C:\Users\goroo\Desktop\CosmicVideoFactory\website
+vercel
+vercel --prod
+```
+
+Example TikTok Developer Portal URLs after deployment:
+
+- Web/Desktop URL: `https://your-vercel-domain.vercel.app/`
+- Terms of Service URL: `https://your-vercel-domain.vercel.app/terms`
+- Privacy Policy URL: `https://your-vercel-domain.vercel.app/privacy`
+
 ## Automated Production Orchestrator (Phase 7)
 
 Automated Production is an optional one-click workflow that starts from a valid
