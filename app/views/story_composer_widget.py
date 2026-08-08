@@ -13,10 +13,12 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
     QMessageBox,
     QPushButton,
     QSpinBox,
+    QHeaderView,
+    QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -228,8 +230,17 @@ class StoryComposerWidget(QWidget):
 
         scenes_box = QGroupBox("Scene Preview")
         scenes_layout = QVBoxLayout(scenes_box)
-        self.scene_list = QListWidget()
-        scenes_layout.addWidget(self.scene_list)
+        self.scene_table = QTableWidget(0, 7)
+        self.scene_table.setHorizontalHeaderLabels(["Index", "Duration", "Type", "Narration", "Subtitle", "Image Prompt", "Notes"])
+        self.scene_table.verticalHeader().setVisible(False)
+        self.scene_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.scene_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.scene_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.scene_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.scene_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        for column in range(3, 7):
+            self.scene_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.Stretch)
+        scenes_layout.addWidget(self.scene_table)
         preview_row.addWidget(scenes_box, stretch=1)
         root.addLayout(preview_row, stretch=1)
 
@@ -238,7 +249,7 @@ class StoryComposerWidget(QWidget):
         self.generate_prompt_button.clicked.connect(self.generate_prompt)
         self.copy_prompt_button = QPushButton("Copy Prompt")
         self.copy_prompt_button.clicked.connect(self.copy_prompt)
-        self.import_button = QPushButton("Import Story JSON")
+        self.import_button = QPushButton("Import Story JSON / Parse / Validate")
         self.import_button.clicked.connect(self.import_story_json)
         self.validate_button = QPushButton("Validate")
         self.validate_button.clicked.connect(self.validate_story)
@@ -292,7 +303,7 @@ class StoryComposerWidget(QWidget):
         self.prompt_preview.clear()
         self.raw_json_edit.clear()
         self.validation_text.clear()
-        self.scene_list.clear()
+        self.scene_table.setRowCount(0)
         self.last_export_label.setText("-")
         self._show_generation_state()
         if project is None:
@@ -311,11 +322,17 @@ class StoryComposerWidget(QWidget):
         if self.project is None:
             self._warn("先にプロジェクトを選択してください。")
             return
-        result = self.story_service.build_prompt(
-            self.project,
-            scene_count=self.scene_count_box.value(),
-            duration_seconds=self.duration_box.value(),
-        )
+        try:
+            result = self.story_service.build_prompt(
+                self.project,
+                scene_count=self.scene_count_box.value(),
+                duration_seconds=self.duration_box.value(),
+                theme=self.theme_input.text().strip(),
+            )
+        except Exception as exc:
+            self.status_label.setText("failed")
+            self._warn(f"Prompt生成に失敗しました。\n{exc}")
+            return
         self.prompt_preview.setPlainText(result.prompt)
         self.status_label.setText("prompt_ready")
 
@@ -332,11 +349,18 @@ class StoryComposerWidget(QWidget):
             self._warn("先にプロジェクトを選択してください。")
             return
         raw = self.raw_json_edit.toPlainText()
+        self.status_label.setText("validating")
         try:
             self.story = self.story_service.import_story_json(self.project, raw)
         except StoryValidationError as exc:
+            self.status_label.setText("invalid")
             self.validation_text.setPlainText(str(exc))
             self._warn(str(exc))
+            return
+        except Exception as exc:
+            self.status_label.setText("failed")
+            self.validation_text.setPlainText(str(exc))
+            self._warn(f"Story JSONの取り込みに失敗しました。\n{exc}")
             return
         self._sync_controls_from_story()
         self._show_validation(self.story.validation)
@@ -348,8 +372,21 @@ class StoryComposerWidget(QWidget):
             self._warn("先にプロジェクトを選択してください。")
             return
         if self.story is None:
-            self.story = self.story_service.load_story(self.project)
-        result = self.story_service.validate_story(self.project, self.story)
+            try:
+                self.story = self.story_service.load_story(self.project)
+            except Exception as exc:
+                self.status_label.setText("failed")
+                self.validation_text.setPlainText(str(exc))
+                self._warn(f"story.jsonの読み込みに失敗しました。\n{exc}")
+                return
+        self.status_label.setText("validating")
+        try:
+            result = self.story_service.validate_story(self.project, self.story)
+        except Exception as exc:
+            self.status_label.setText("failed")
+            self.validation_text.setPlainText(str(exc))
+            self._warn(f"Validationに失敗しました。\n{exc}")
+            return
         if self.story is not None:
             self.story.validation = result
             self.story.status = "invalid" if result.has_errors else "valid"
@@ -372,16 +409,25 @@ class StoryComposerWidget(QWidget):
     def resume_story(self, show_missing: bool = True) -> None:
         if self.project is None:
             return
-        story = self.story_service.load_story(self.project)
-        manifest = self.story_service.load_manifest(self.project)
+        try:
+            story = self.story_service.load_story(self.project)
+            manifest = self.story_service.load_manifest(self.project)
+        except Exception as exc:
+            self.story = None
+            self.status_label.setText("failed")
+            self.validation_text.setPlainText(str(exc))
+            if show_missing:
+                self._warn(f"Story Composerの状態復元に失敗しました。\n{exc}")
+            return
         self.story = story
         self.prompt_preview.setPlainText(str(manifest.get("prompt") or ""))
         self.raw_json_edit.setPlainText(str(manifest.get("raw_response") or ""))
         self.last_export_label.setText(str(manifest.get("last_exported_at") or "-"))
         if story is None:
-            self.status_label.setText("draft")
+            fallback_status = str(manifest.get("status") or ("prompt_ready" if manifest.get("prompt") else "draft"))
+            self.status_label.setText(fallback_status)
             self.validation_text.setPlainText("story.jsonはまだありません。")
-            self.scene_list.clear()
+            self.scene_table.setRowCount(0)
             if show_missing:
                 QMessageBox.information(self, "Story Composer", "保存済みStoryはありません。")
             return
@@ -412,7 +458,7 @@ class StoryComposerWidget(QWidget):
             return
         try:
             preview = self.story_service.export_preview(self.project)
-        except StoryValidationError as exc:
+        except Exception as exc:
             self._warn(str(exc))
             return
         self.validation_text.setPlainText(self._format_export_preview(preview))
@@ -422,7 +468,12 @@ class StoryComposerWidget(QWidget):
             self._warn("先にプロジェクトを選択してください。")
             return
         if self.story is None:
-            self.story = self.story_service.load_story(self.project)
+            try:
+                self.story = self.story_service.load_story(self.project)
+            except Exception as exc:
+                self.status_label.setText("failed")
+                self._warn(f"story.jsonの読み込みに失敗しました。\n{exc}")
+                return
         if self.story is None:
             self._warn("ExportできるStoryがありません。")
             return
@@ -784,29 +835,48 @@ class StoryComposerWidget(QWidget):
         self.duration_box.setValue(float(self.story.estimated_duration or 60.0))
 
     def _show_validation(self, result: ValidationResult) -> None:
-        lines = [f"status: {result.status}"]
-        for severity, issues in [("error", result.errors), ("warning", result.warnings), ("info", result.infos)]:
+        lines = [f"Status: {result.status}"]
+        if not result.errors and not result.warnings and not result.infos:
+            lines.append("問題は見つかりませんでした。")
+        for severity, issues, label in [
+            ("error", result.errors, "Errors / Exportを止める項目"),
+            ("warning", result.warnings, "Warnings / 確認推奨"),
+            ("info", result.infos, "Info"),
+        ]:
             if not issues:
                 continue
             lines.append("")
-            lines.append(severity.upper())
+            lines.append(label)
             for issue in issues:
-                scene = f" scene={issue.scene_index}" if issue.scene_index is not None else ""
-                field = f" [{issue.field}]" if issue.field else ""
-                lines.append(f"-{scene}{field} {issue.message}")
+                location = []
+                if issue.scene_index is not None:
+                    location.append(f"scene {issue.scene_index}")
+                if issue.field:
+                    location.append(issue.field)
+                where = f" ({' / '.join(location)})" if location else ""
+                lines.append(f"- [{severity}]{where}: {issue.message}")
         self.validation_text.setPlainText("\n".join(lines))
 
     def _show_scenes(self) -> None:
-        self.scene_list.clear()
+        self.scene_table.setRowCount(0)
         if self.story is None:
             return
-        for scene in sorted(self.story.scenes, key=lambda item: item.scene_index):
-            self.scene_list.addItem(
-                f"{scene.scene_index}. {scene.scene_type} "
-                f"{scene.start_time:.1f}-{scene.end_time:.1f}s\n"
-                f"字幕: {scene.subtitle or '-'}\n"
-                f"画像: {scene.image_prompt[:120]}"
-            )
+        scenes = sorted(self.story.scenes, key=lambda item: item.scene_index)
+        self.scene_table.setRowCount(len(scenes))
+        for row, scene in enumerate(scenes):
+            values = [
+                str(scene.scene_index),
+                f"{scene.duration:.1f}s ({scene.start_time:.1f}-{scene.end_time:.1f})",
+                scene.scene_type,
+                scene.narration,
+                scene.subtitle,
+                scene.image_prompt,
+                scene.notes,
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setToolTip(value)
+                self.scene_table.setItem(row, column, item)
 
     def _format_export_preview(self, preview: FactoryExportPreview) -> str:
         return "\n".join(

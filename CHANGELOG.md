@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.13.3
+- Added Phase 7 Quality Check as a local pre-upload quality gate.
+- Added checks for Story/text, images, VOICEVOX audio, final video metadata, and publishing readiness.
+- Added `quality_check.json` persistence and a Production Wizard Quality Check tab.
+- YouTube and TikTok upload actions now block when the latest Quality Check has ERROR items.
+- Added mock-based Quality Check service and UI guard tests.
+
+## v0.13.2
+- YouTube upload now defaults to category ID `28` (`Science & Technology` / `科学と技術`).
+- YouTube upload now appends the VOICEVOX credit line to the description without duplicating it.
+- YouTube upload now sends the AI/synthetic media disclosure flag.
+- YouTube upload now adds the video to a category-matched playlist and can create the playlist if missing.
+- Documented that TikTok Inbox Upload does not expose an AI-generated content request field in the current official Upload API schema.
+
 ## v0.13.1
 - Gemini Story Providerを追加
 - `google-genai` SDK + Structured Outputsに対応

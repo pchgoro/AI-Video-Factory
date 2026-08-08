@@ -9,7 +9,7 @@ from services.youtube.models import YouTubeAuthError
 from services.youtube.token_store import KeyringTokenStore
 
 
-YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
+YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube"
 
 
 class YouTubeOAuthService:

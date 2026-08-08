@@ -49,6 +49,18 @@ def test_story_save_load_manifest_and_resume_do_not_touch_factory_files(tmp_path
     assert (project.path / "title.txt").read_text(encoding="utf-8") == original_title
 
 
+def test_build_prompt_uses_ui_theme_override_and_persists_prompt_ready(tmp_path) -> None:
+    service, _project_service, project = _service_and_project(tmp_path)
+
+    result = service.build_prompt(project, scene_count=3, duration_seconds=30.0, theme="UI entered theme")
+    manifest = service.load_manifest(project)
+
+    assert "Theme: UI entered theme" in result.prompt
+    assert manifest["status"] == "prompt_ready"
+    assert manifest["theme"] == "UI entered theme"
+    assert manifest["prompt"] == result.prompt
+
+
 def test_validate_missing_story_returns_error(tmp_path) -> None:
     service, _project_service, project = _service_and_project(tmp_path)
 

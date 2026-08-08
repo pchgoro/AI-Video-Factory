@@ -162,6 +162,7 @@ def test_gemini_provider_uses_google_genai_structured_outputs(monkeypatch) -> No
 
 
 def test_missing_api_key_makes_no_request(monkeypatch) -> None:
+    monkeypatch.setattr("services.story_provider.gemini_provider.load_dotenv", lambda *args, **kwargs: None)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     fake_models = FakeModels(_response())
 

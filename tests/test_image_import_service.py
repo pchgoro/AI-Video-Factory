@@ -5,7 +5,9 @@ from pathlib import Path
 import pytest
 from PySide6.QtGui import QColor, QImage
 
+from config import AppPaths
 from services.image_import_service import ImageImportError, ImageImportService
+from services.project_service import ProjectService
 
 
 def _make_image(path: Path, color: QColor, image_format: str = "PNG") -> None:
@@ -52,6 +54,23 @@ def test_existing_images_can_be_appended(tmp_path) -> None:
 
     assert (project_dir / "images" / "001.png").exists()
     assert (project_dir / "images" / "002.png").exists()
+
+
+def test_imported_images_complete_project_image_progress(tmp_path) -> None:
+    paths = AppPaths(tmp_path)
+    paths.ensure()
+    project_service = ProjectService(paths)
+    project = project_service.create_project("manual images", "space", "60s", 3, "prompt")
+    sources = []
+    for index, color in enumerate(["red", "green", "blue"], start=1):
+        source = tmp_path / f"source_{index}.png"
+        _make_image(source, QColor(color))
+        sources.append(source)
+
+    ImageImportService().import_files(project.path, sources, "overwrite")
+
+    reloaded = project_service.load_project(project.path)
+    assert reloaded.progress["画像"] is True
 
 
 def test_move_image_renumbers_sequence(tmp_path) -> None:

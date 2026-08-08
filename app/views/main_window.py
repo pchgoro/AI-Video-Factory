@@ -62,6 +62,7 @@ from services.project_service import ProjectService
 from services.project_filter_service import ProjectBulkUpdate, ProjectFilterCriteria, ProjectFilterService, UNCATEGORIZED
 from services.project_analytics_service import ProjectAnalyticsReport, ProjectAnalyticsService
 from services.prompt_builder import build_bulk_image_prompt, build_chatgpt_prompt
+from services.quality_check_service import QualityCheckResult, QualityCheckService
 from services.settings_service import SettingsService
 from services.tag_service import TagService
 from services.template_service import TemplateService
@@ -148,6 +149,7 @@ class MainWindow(QMainWindow):
         video_render_service: VideoRenderService,
         voicevox_service: VoicevoxService,
         production_orchestrator_service,
+        quality_check_service: QualityCheckService | None = None,
         version_info: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
@@ -166,6 +168,7 @@ class MainWindow(QMainWindow):
         self.video_render_service = video_render_service
         self.voicevox_service = voicevox_service
         self.production_orchestrator_service = production_orchestrator_service
+        self.quality_check_service = quality_check_service or QualityCheckService(self.settings_service.load(), story_service)
         self.version_info = version_info or {}
         self.logger = logging.getLogger("ai_video_factory")
         self.parser = ChatGptAnswerParser()
@@ -553,6 +556,7 @@ class MainWindow(QMainWindow):
         self.content_tabs.addTab(self._build_bulk_image_prompt_tab(), "Bulk Image Generation")
         self.content_tabs.addTab(self._build_assets_tab(), "Assets")
         self.content_tabs.addTab(self._build_project_analytics_tab(), "Project Analytics")
+        self.content_tabs.addTab(self._build_quality_check_tab(), "Quality Check")
         self.content_tabs.addTab(self._build_video_preview_tab(), "Final Video Preview")
         layout.addWidget(self.content_tabs, stretch=2)
         bottom = QHBoxLayout()
@@ -975,6 +979,32 @@ class MainWindow(QMainWindow):
         self.project_analytics_text.setReadOnly(True)
         self.project_analytics_text.setPlaceholderText("Import CSV analytics to show project performance.")
         layout.addWidget(self.project_analytics_text, stretch=1)
+        return panel
+    def _build_quality_check_tab(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        summary_box = QGroupBox("Quality Gate")
+        summary = QGridLayout(summary_box)
+        self.quality_overall_label = QLabel("-")
+        self.quality_errors_label = QLabel("0")
+        self.quality_warnings_label = QLabel("0")
+        self.quality_checked_at_label = QLabel("-")
+        summary.addWidget(QLabel("Overall Status"), 0, 0)
+        summary.addWidget(self.quality_overall_label, 0, 1)
+        summary.addWidget(QLabel("Errors"), 0, 2)
+        summary.addWidget(self.quality_errors_label, 0, 3)
+        summary.addWidget(QLabel("Warnings"), 1, 2)
+        summary.addWidget(self.quality_warnings_label, 1, 3)
+        summary.addWidget(QLabel("Checked At"), 1, 0)
+        summary.addWidget(self.quality_checked_at_label, 1, 1)
+        self.quality_recheck_button = QPushButton("Run Quality Check")
+        self.quality_recheck_button.clicked.connect(self.run_quality_check)
+        summary.addWidget(self.quality_recheck_button, 2, 0, 1, 4)
+        layout.addWidget(summary_box)
+        self.quality_result_text = QTextEdit()
+        self.quality_result_text.setReadOnly(True)
+        self.quality_result_text.setPlaceholderText("Run Quality Check after final.mp4 is generated.")
+        layout.addWidget(self.quality_result_text, stretch=1)
         return panel
     def _build_video_preview_tab(self) -> QWidget:
         panel = QWidget()
@@ -1886,11 +1916,16 @@ class MainWindow(QMainWindow):
             self._suspend_project_classification_save = False
         self._load_project_texts(self.current_project.path)
         self._load_platform_tag_fields()
+        if hasattr(self, "story_composer_widget"):
+            self.story_composer_widget.set_project(self.current_project)
+        if hasattr(self, "production_orchestrator_widget"):
+            self.production_orchestrator_widget.set_project(self.current_project)
         self.update_progress_view()
         self.update_asset_list()
         self.update_image_prompt_list()
         self.update_video_preview()
         self.refresh_project_analytics_view()
+        self.update_quality_check_view()
         self.update_wizard()
         self.status_label.setText(f"プロジェクトを開きました: {self.current_project.name}")
 
@@ -2240,6 +2275,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "YouTube Upload", "Upload is not retryable. Use Retry Upload only before a video ID is set.")
             self.update_youtube_upload_view()
             return
+        if self._quality_check_blocks_upload("YouTube Upload"):
+            return
         self._set_youtube_upload_controls_enabled(False)
         self.youtube_upload_progress_label.setText("starting")
         self.youtube_upload_thread = QThread(self)
@@ -2367,6 +2404,9 @@ class MainWindow(QMainWindow):
             self.update_tiktok_upload_view()
             return
         self.current_project = project
+        if self._quality_check_blocks_upload("TikTok Upload"):
+            return
+        self.current_project = project
         self._start_tiktok_worker(TikTokUploadWorker(self.tiktok_upload_service, project, retry=retry), "upload")
     def check_tiktok_status(self) -> None:
         if self.current_project is None:
@@ -2443,15 +2483,99 @@ class MainWindow(QMainWindow):
     def on_story_exported(self, project_path: Path) -> None:
         if self.current_project is not None and self.current_project.path == project_path:
             self.current_project = self.project_service.load_project(project_path)
+            self._load_project_texts(project_path)
+            self._load_platform_tag_fields()
+            if hasattr(self, "story_composer_widget"):
+                self.story_composer_widget.set_project(self.current_project)
         self.reload_projects()
+        self.update_progress_view()
+        self.update_asset_list()
+        self.update_image_prompt_list()
+        self.update_quality_check_view()
         self.update_wizard()
         self.status_label.setText("Story exported to Factory files.")
     def on_production_run_updated(self, project_path: Path) -> None:
         if self.current_project is not None and self.current_project.path == project_path:
             self.current_project = self.project_service.load_project(project_path)
         self.reload_projects()
+        self.update_quality_check_view()
         self.update_wizard()
         self.status_label.setText("Production run updated.")
+    def run_quality_check(self) -> None:
+        if self.current_project is None:
+            QMessageBox.warning(self, "Quality Check", "Select a project first.")
+            return
+        try:
+            self.current_project = self.project_service.load_project(self.current_project.path)
+            result = self.quality_check_service.run(self.current_project)
+        except Exception as exc:
+            QMessageBox.warning(self, "Quality Check", f"Quality check failed.\n{exc}")
+            return
+        self.update_quality_check_view(result)
+        if result.overall_status == "ERROR":
+            self.status_label.setText("Quality Check: ERROR. Upload is blocked.")
+        elif result.overall_status == "WARNING":
+            self.status_label.setText("Quality Check: WARNING. Review before upload.")
+        else:
+            self.status_label.setText("Quality Check: PASS.")
+    def update_quality_check_view(self, result: QualityCheckResult | None = None) -> None:
+        if not hasattr(self, "quality_overall_label"):
+            return
+        if self.current_project is None:
+            self.quality_overall_label.setText("-")
+            self.quality_errors_label.setText("0")
+            self.quality_warnings_label.setText("0")
+            self.quality_checked_at_label.setText("-")
+            self.quality_result_text.setPlainText("")
+            return
+        result = result or self.quality_check_service.load_result(self.current_project)
+        if result is None:
+            self.quality_overall_label.setText("Not checked")
+            self.quality_errors_label.setText("0")
+            self.quality_warnings_label.setText("0")
+            self.quality_checked_at_label.setText("-")
+            self.quality_result_text.setPlainText("No saved Quality Check result. Click Run Quality Check.")
+            return
+        self.quality_overall_label.setText(result.overall_status)
+        color = {"PASS": "#6a9955", "WARNING": "#dcdcaa", "ERROR": "#f48771"}.get(result.overall_status, "#d4d4d4")
+        self.quality_overall_label.setStyleSheet(f"color:{color}; font-weight:700;")
+        self.quality_errors_label.setText(str(result.error_count))
+        self.quality_warnings_label.setText(str(result.warning_count))
+        self.quality_checked_at_label.setText(result.checked_at or "-")
+        self.quality_result_text.setPlainText(self._format_quality_check_result(result))
+    def _format_quality_check_result(self, result: QualityCheckResult) -> str:
+        lines = [
+            f"Overall: {result.overall_status}",
+            f"Errors: {result.error_count} / Warnings: {result.warning_count}",
+            f"Checked at: {result.checked_at}",
+            "",
+        ]
+        for item in result.items:
+            scene = f" scene={item.scene_index}" if item.scene_index is not None else ""
+            target = f" target={item.target}" if item.target else ""
+            lines.append(f"[{item.level}] {item.category}.{item.check_id}{scene}{target}")
+            lines.append(f"  {item.message}")
+        return "\n".join(lines)
+    def _quality_check_blocks_upload(self, title: str) -> bool:
+        if self.current_project is None:
+            return True
+        try:
+            project = self.project_service.load_project(self.current_project.path)
+            blocked, result = self.quality_check_service.has_blocking_errors(project)
+            self.current_project = project
+            self.update_quality_check_view(result)
+        except Exception as exc:
+            QMessageBox.warning(self, title, f"Quality Check failed. Upload was not started.\n{exc}")
+            return True
+        if blocked:
+            QMessageBox.warning(
+                self,
+                title,
+                f"Quality Check has {result.error_count} error(s). Fix them before uploading.",
+            )
+            self.status_label.setText("Quality Check failed. Upload was blocked.")
+            return True
+        return False
     def _clear_tiktok_worker(self) -> None:
         self.tiktok_thread = None
         self.tiktok_worker = None
@@ -2688,7 +2812,7 @@ class MainWindow(QMainWindow):
             bool(self.topic_input.text().strip()),
             bool(self.current_project),
             bool(progress.get("台本")),
-            bool(progress.get("??")),
+            bool(progress.get("画像")),
             bool(progress.get("音声")),
             bool(progress.get("動画")),
             bool(progress.get("投稿")),

@@ -59,10 +59,16 @@ class StoryService:
         )
         self.logger = logger
 
-    def build_prompt(self, project: ProjectInfo, scene_count: int, duration_seconds: float | None = None) -> StoryPromptResult:
+    def build_prompt(
+        self,
+        project: ProjectInfo,
+        scene_count: int,
+        duration_seconds: float | None = None,
+        theme: str | None = None,
+    ) -> StoryPromptResult:
         request = StoryPromptRequest(
             project_id=project.name,
-            theme=project.topic or project.title,
+            theme=(theme or project.topic or project.title).strip(),
             genre=project.genre,
             category=project.category,
             duration_seconds=duration_seconds or self._duration_seconds(project.duration),
@@ -78,6 +84,8 @@ class StoryService:
                 "schema_version": result.schema_version,
                 "story_prompt_version": result.story_prompt_version,
                 "prompt": result.prompt,
+                "status": "prompt_ready",
+                "theme": request.theme,
                 "updated_at": now,
             }
         )

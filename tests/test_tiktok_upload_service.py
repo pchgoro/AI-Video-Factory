@@ -85,6 +85,7 @@ def test_upload_success_saves_state_without_upload_url(tmp_path) -> None:
     assert reloaded.tiktok_upload["remote_status"] == "SEND_TO_USER_INBOX"
     assert "upload_url" not in reloaded.tiktok_upload
     assert api_client.put_calls[0]["content_range"].startswith("bytes 0-")
+    assert "post_info" not in api_client.post_calls[0]["payload"]
 
 
 def test_retry_succeeds_after_transient_init_error(tmp_path) -> None:

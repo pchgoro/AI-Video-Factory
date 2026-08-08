@@ -34,6 +34,7 @@ from services.logging_service import (
     setup_youtube_logging,
 )
 from services.project_service import ProjectService
+from services.quality_check_service import QualityCheckService
 from services.production_orchestrator import ArtifactService, ProductionOrchestratorService, ProductionPreflightService
 from services.production_orchestrator.steps import (
     ExportStoryStep,
@@ -97,6 +98,7 @@ def main() -> int:
         logger=image_generation_logger,
     )
     story_service = StoryService(project_service, logger=story_provider_logger)
+    quality_check_service = QualityCheckService(settings, story_service)
     story_service.provider_manager = StoryProviderManager(
         [
             ManualPromptProviderAdapter(story_service.provider),
@@ -111,7 +113,7 @@ def main() -> int:
     )
     job_service = JobService(project_service)
     youtube_oauth_service = YouTubeOAuthService(paths.base_dir, logger=youtube_logger)
-    youtube_upload_service = YouTubeUploadService(project_service, job_service, youtube_oauth_service, logger=youtube_logger)
+    youtube_upload_service = YouTubeUploadService(project_service, job_service, youtube_oauth_service, logger=youtube_logger, settings=settings)
     tiktok_api_client = TikTokApiClient()
     tiktok_oauth_service = TikTokOAuthService(paths.base_dir, logger=tiktok_logger)
     tiktok_status_service = TikTokStatusService(project_service, tiktok_oauth_service, tiktok_api_client, logger=tiktok_logger)
@@ -166,6 +168,7 @@ def main() -> int:
         video_render_service=video_render_service,
         voicevox_service=voicevox_service,
         production_orchestrator_service=production_orchestrator_service,
+        quality_check_service=quality_check_service,
         version_info=version_info,
     )
     window.show()

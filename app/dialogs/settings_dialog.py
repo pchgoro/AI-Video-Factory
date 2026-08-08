@@ -388,6 +388,32 @@ class SettingsDialog(QDialog):
         self.gemini_temperature_box.setValue(float(getattr(settings, "gemini_temperature", 0.7)))
         form.addRow("Gemini temperature", self.gemini_temperature_box)
 
+        self.youtube_playlist_check = QCheckBox("YouTubeアップロード後にカテゴリ名の再生リストへ追加")
+        self.youtube_playlist_check.setChecked(bool(getattr(settings, "youtube_add_to_category_playlist", True)))
+        form.addRow("YouTube playlist", self.youtube_playlist_check)
+
+        self.youtube_create_playlist_check = QCheckBox("再生リストがなければ作成する")
+        self.youtube_create_playlist_check.setChecked(bool(getattr(settings, "youtube_create_playlist_if_missing", True)))
+        form.addRow("YouTube playlist create", self.youtube_create_playlist_check)
+
+        self.youtube_playlist_privacy_box = QComboBox()
+        self.youtube_playlist_privacy_box.addItems(["private", "unlisted", "public"])
+        self.youtube_playlist_privacy_box.setCurrentText(str(getattr(settings, "youtube_playlist_privacy_status", "private")))
+        form.addRow("YouTube playlist privacy", self.youtube_playlist_privacy_box)
+
+        self.youtube_voicevox_credit_check = QCheckBox("説明欄にVOICEVOX表記を追加")
+        self.youtube_voicevox_credit_check.setChecked(bool(getattr(settings, "youtube_voicevox_credit_enabled", True)))
+        form.addRow("YouTube VOICEVOX credit", self.youtube_voicevox_credit_check)
+
+        self.youtube_ai_disclosure_check = QCheckBox("AI使用の申告を「はい」にする")
+        self.youtube_ai_disclosure_check.setChecked(bool(getattr(settings, "youtube_ai_disclosure_enabled", True)))
+        form.addRow("YouTube AI disclosure", self.youtube_ai_disclosure_check)
+
+        self.youtube_category_id_edit = QLineEdit(str(getattr(settings, "youtube_category_id", "28")))
+        form.addRow("YouTube category ID", self.youtube_category_id_edit)
+
+        form.addRow("TikTok AIGC label", QLabel("Inbox Upload APIでは未対応（TikTokアプリ側で設定）"))
+
         layout.addLayout(form)
 
         bgm_folder_button = QPushButton("BGMフォルダを開く")
@@ -501,6 +527,12 @@ class SettingsDialog(QDialog):
             gemini_timeout_seconds=self.story_timeout_box.value(),
             gemini_temperature=self.gemini_temperature_box.value(),
             gemini_max_output_tokens=self.story_max_output_box.value(),
+            youtube_add_to_category_playlist=self.youtube_playlist_check.isChecked(),
+            youtube_create_playlist_if_missing=self.youtube_create_playlist_check.isChecked(),
+            youtube_playlist_privacy_status=self.youtube_playlist_privacy_box.currentText(),
+            youtube_voicevox_credit_enabled=self.youtube_voicevox_credit_check.isChecked(),
+            youtube_ai_disclosure_enabled=self.youtube_ai_disclosure_check.isChecked(),
+            youtube_category_id=self.youtube_category_id_edit.text().strip() or "28",
             image_common_conditions=self.image_common_conditions_edit.toPlainText().strip()
             or "・9:16\n・4K\n・文字なし\n・リアル\n・映画風\n・ドキュメンタリー風",
         )

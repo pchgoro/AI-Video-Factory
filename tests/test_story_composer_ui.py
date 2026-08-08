@@ -40,6 +40,23 @@ def test_story_composer_buttons_exist() -> None:
         assert label in source
 
 
+def test_story_composer_factory_ui_fields_exist() -> None:
+    source = Path("app/views/story_composer_widget.py").read_text(encoding="utf-8")
+
+    for label in ["Theme", "Status", "Prompt Preview", "Raw Story JSON", "Validation Result", "Scene Preview"]:
+        assert label in source
+    for column in ["Index", "Duration", "Type", "Narration", "Subtitle", "Image Prompt", "Notes"]:
+        assert column in source
+    assert "QTableWidget" in source
+
+
+def test_story_prompt_uses_theme_input() -> None:
+    source = Path("app/views/story_composer_widget.py").read_text(encoding="utf-8")
+    generate_prompt = _method_source(source, "generate_prompt")
+
+    assert "theme=self.theme_input.text().strip()" in generate_prompt
+
+
 def test_generate_import_validate_resume_preview_do_not_call_external_workflows() -> None:
     source = Path("app/views/story_composer_widget.py").read_text(encoding="utf-8")
     snippets = "\n".join(
@@ -87,3 +104,14 @@ def test_reset_requires_confirmation_and_does_not_name_factory_assets_for_delete
     assert "story_service.reset" in reset
     assert "final.mp4" in reset
     assert "title.txt" in reset
+
+
+def test_main_window_passes_project_to_story_composer_and_refreshes_after_export() -> None:
+    main_source = Path("app/views/main_window.py").read_text(encoding="utf-8")
+    load_project = _method_source(main_source, "_load_project")
+    exported = _method_source(main_source, "on_story_exported")
+
+    assert "story_composer_widget.set_project(self.current_project)" in load_project
+    assert "story_composer_widget.set_project(self.current_project)" in exported
+    assert "_load_project_texts(project_path)" in exported
+    assert "update_image_prompt_list()" in exported

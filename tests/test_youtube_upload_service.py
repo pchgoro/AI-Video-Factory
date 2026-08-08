@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from config import AppPaths
+from models import AppSettings
 from services.job_service import JobService
 from services.project_service import ProjectService
 from services.youtube.models import YouTubeDuplicateUploadError, YouTubeTokenStorageError, YouTubeUploadError, YouTubeValidationError
@@ -47,13 +48,72 @@ class FakeVideos:
         return self.request
 
 
+class FakeExecuteRequest:
+    def __init__(self, response: dict[str, object] | None = None, error: Exception | None = None) -> None:
+        self.response = response or {}
+        self.error = error
+
+    def execute(self):
+        if self.error:
+            raise self.error
+        return self.response
+
+
+class FakePlaylists:
+    def __init__(self, youtube: "FakeYouTube") -> None:
+        self.youtube = youtube
+
+    def list(self, **kwargs):
+        self.youtube.playlists_list_calls.append(kwargs)
+        items = [
+            {"id": playlist_id, "snippet": {"title": title}}
+            for title, playlist_id in self.youtube.playlists_by_title.items()
+        ]
+        return FakeExecuteRequest({"items": items})
+
+    def insert(self, **kwargs):
+        self.youtube.playlists_insert_calls.append(kwargs)
+        title = str(kwargs["body"]["snippet"]["title"])
+        playlist_id = f"pl-{len(self.youtube.playlists_by_title) + 1}"
+        self.youtube.playlists_by_title[title] = playlist_id
+        return FakeExecuteRequest({"id": playlist_id})
+
+
+class FakePlaylistItems:
+    def __init__(self, youtube: "FakeYouTube") -> None:
+        self.youtube = youtube
+
+    def insert(self, **kwargs):
+        self.youtube.playlist_item_insert_calls.append(kwargs)
+        if self.youtube.playlist_insert_error:
+            return FakeExecuteRequest(error=self.youtube.playlist_insert_error)
+        return FakeExecuteRequest({"id": "playlist-item-1"})
+
+
 class FakeYouTube:
-    def __init__(self, request: FakeRequest, captured: dict[str, object]) -> None:
+    def __init__(
+        self,
+        request: FakeRequest,
+        captured: dict[str, object],
+        playlists_by_title: dict[str, str] | None = None,
+        playlist_insert_error: Exception | None = None,
+    ) -> None:
         self.request = request
         self.captured = captured
+        self.playlists_by_title = dict(playlists_by_title or {})
+        self.playlists_list_calls: list[dict[str, object]] = []
+        self.playlists_insert_calls: list[dict[str, object]] = []
+        self.playlist_item_insert_calls: list[dict[str, object]] = []
+        self.playlist_insert_error = playlist_insert_error
 
     def videos(self) -> FakeVideos:
         return FakeVideos(self.request, self.captured)
+
+    def playlists(self) -> FakePlaylists:
+        return FakePlaylists(self)
+
+    def playlistItems(self) -> FakePlaylistItems:
+        return FakePlaylistItems(self)
 
 
 class FakeOAuth:
@@ -74,6 +134,7 @@ def _project(tmp_path: Path):
     paths.ensure()
     project_service = ProjectService(paths)
     project = project_service.create_project("Black Hole", "space", "60s", 3, "prompt", tags=["space"])
+    project_service.update_metadata(project.path, {"category": "宇宙"})
     project_service.save_preview_files(project, {"script.txt": "description"})
     return project_service, JobService(project_service), project_service.load_project(project.path)
 
@@ -93,6 +154,7 @@ def _service(project_service, job_service, oauth, **kwargs):
         backoff_base_seconds=0,
         sleeper=lambda _delay: None,
         media_upload_factory=lambda *args, **media_kwargs: {"args": args, "kwargs": media_kwargs},
+        settings=kwargs.pop("settings", AppSettings()),
         **kwargs,
     )
 
@@ -130,10 +192,60 @@ def test_upload_uses_private_status_and_saves_video_id(tmp_path) -> None:
     body = captured["body"]
     assert body["status"]["privacyStatus"] == "private"
     assert body["status"]["selfDeclaredMadeForKids"] is False
+    assert body["status"]["containsSyntheticMedia"] is True
+    assert body["snippet"]["categoryId"] == "28"
+    assert "音声はVOICEVOXを使用させていただいております。" in body["snippet"]["description"]
     reloaded = project_service.load_project(project.path)
     assert reloaded.youtube_upload["video_id"] == "abc123"
     assert reloaded.youtube_upload["status"] == "uploaded"
     assert reloaded.job["status"] == "youtube_uploaded"
+    assert reloaded.youtube_upload["playlist_status"] == "added"
+    assert reloaded.youtube_upload["playlist_title"] == "宇宙"
+
+
+def test_upload_adds_video_to_existing_category_playlist(tmp_path) -> None:
+    project_service, job_service, project = _project(tmp_path)
+    _write_final_mp4(project)
+    captured: dict[str, object] = {}
+    request = FakeRequest([(FakeProgress(1.0), {"id": "abc123"})])
+    youtube = FakeYouTube(request, captured, playlists_by_title={"宇宙": "playlist-1"})
+    service = _service(project_service, job_service, FakeOAuth(youtube))
+
+    service.upload_project(project)
+
+    assert youtube.playlists_insert_calls == []
+    assert youtube.playlist_item_insert_calls[0]["body"]["snippet"]["playlistId"] == "playlist-1"
+    assert youtube.playlist_item_insert_calls[0]["body"]["snippet"]["resourceId"]["videoId"] == "abc123"
+
+
+def test_upload_creates_category_playlist_when_missing(tmp_path) -> None:
+    project_service, job_service, project = _project(tmp_path)
+    _write_final_mp4(project)
+    captured: dict[str, object] = {}
+    request = FakeRequest([(FakeProgress(1.0), {"id": "abc123"})])
+    youtube = FakeYouTube(request, captured)
+    service = _service(project_service, job_service, FakeOAuth(youtube))
+
+    service.upload_project(project)
+
+    assert youtube.playlists_insert_calls[0]["body"]["snippet"]["title"] == "宇宙"
+    assert youtube.playlists_insert_calls[0]["body"]["status"]["privacyStatus"] == "private"
+
+
+def test_playlist_failure_does_not_remove_uploaded_video_id(tmp_path) -> None:
+    project_service, job_service, project = _project(tmp_path)
+    _write_final_mp4(project)
+    captured: dict[str, object] = {}
+    request = FakeRequest([(FakeProgress(1.0), {"id": "abc123"})])
+    youtube = FakeYouTube(request, captured, playlists_by_title={"宇宙": "playlist-1"}, playlist_insert_error=RuntimeError("playlist boom"))
+    service = _service(project_service, job_service, FakeOAuth(youtube))
+
+    service.upload_project(project)
+
+    reloaded = project_service.load_project(project.path)
+    assert reloaded.youtube_upload["status"] == "uploaded"
+    assert reloaded.youtube_upload["video_id"] == "abc123"
+    assert reloaded.youtube_upload["playlist_status"] == "failed"
 
 
 def test_retry_succeeds_after_transient_error(tmp_path) -> None:

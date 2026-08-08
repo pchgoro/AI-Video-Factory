@@ -9,7 +9,7 @@ from typing import Callable
 
 from PySide6.QtCore import QObject, Signal
 
-from models import ProjectInfo
+from models import AppSettings, ProjectInfo
 from services.job_service import JobService
 from services.project_service import ProjectService
 from services.youtube.models import (
@@ -25,6 +25,9 @@ from services.youtube.oauth_service import YouTubeOAuthService
 
 ProgressCallback = Callable[[dict[str, object]], None]
 CancelCallback = Callable[[], bool]
+VOICEVOX_CREDIT_LINE = "音声はVOICEVOXを使用させていただいております。"
+DEFAULT_YOUTUBE_CATEGORY_ID = "28"
+VALID_PLAYLIST_PRIVACY_STATUSES = {"private", "unlisted", "public"}
 
 
 class YouTubeUploadWorker(QObject):
@@ -85,6 +88,7 @@ class YouTubeUploadService:
         backoff_base_seconds: float = 1.0,
         sleeper: Callable[[float], None] = time.sleep,
         media_upload_factory: Callable[..., object] | None = None,
+        settings: AppSettings | None = None,
     ) -> None:
         self.project_service = project_service
         self.job_service = job_service
@@ -94,6 +98,7 @@ class YouTubeUploadService:
         self.backoff_base_seconds = backoff_base_seconds
         self.sleeper = sleeper
         self.media_upload_factory = media_upload_factory
+        self.settings = settings or AppSettings()
 
     def upload_project(
         self,
@@ -125,6 +130,7 @@ class YouTubeUploadService:
             self._record_failure(project, wrapped, detail=str(exc))
             raise wrapped from exc
 
+        playlist_result = self._add_to_category_playlist(project, youtube, result.video_id)
         self._set_upload_state(
             project,
             {
@@ -133,6 +139,7 @@ class YouTubeUploadService:
                 "url": result.url,
                 "upload_timestamp": result.upload_timestamp,
                 "retry_count": result.retry_count,
+                **playlist_result,
                 "last_error": "",
                 "updated_at": self._now(),
             },
@@ -215,19 +222,110 @@ class YouTubeUploadService:
     def _video_body(self, project: ProjectInfo) -> dict[str, object]:
         title = (project.title or project.topic or project.name).strip() or "AI Video Factory Upload"
         description = self._read_text(project.path / "script.txt").strip()
+        if self.settings.youtube_voicevox_credit_enabled:
+            description = self._append_voicevox_credit(description)
         tags = project.youtube_tags or project.tags
         return {
             "snippet": {
                 "title": title[:100],
                 "description": description,
                 "tags": tags,
-                "categoryId": "27",
+                "categoryId": self._youtube_category_id(),
             },
             "status": {
                 "privacyStatus": "private",
                 "selfDeclaredMadeForKids": False,
+                "containsSyntheticMedia": bool(self.settings.youtube_ai_disclosure_enabled),
             },
         }
+
+    def _append_voicevox_credit(self, description: str) -> str:
+        if VOICEVOX_CREDIT_LINE in description:
+            return description
+        if not description:
+            return VOICEVOX_CREDIT_LINE
+        return f"{description.rstrip()}\n\n{VOICEVOX_CREDIT_LINE}"
+
+    def _youtube_category_id(self) -> str:
+        category_id = str(getattr(self.settings, "youtube_category_id", "") or "").strip()
+        return category_id if category_id.isdigit() else DEFAULT_YOUTUBE_CATEGORY_ID
+
+    def _add_to_category_playlist(self, project: ProjectInfo, youtube, video_id: str) -> dict[str, object]:
+        if not getattr(self.settings, "youtube_add_to_category_playlist", True):
+            return {"playlist_status": "disabled"}
+        playlist_title = (project.category or "Uncategorized").strip() or "Uncategorized"
+        try:
+            playlist_id = self._find_playlist_id(youtube, playlist_title)
+            created = False
+            if not playlist_id:
+                if not getattr(self.settings, "youtube_create_playlist_if_missing", True):
+                    return {
+                        "playlist_status": "skipped",
+                        "playlist_title": playlist_title,
+                        "playlist_error": "playlist not found",
+                    }
+                playlist_id = self._create_playlist(youtube, playlist_title)
+                created = True
+            youtube.playlistItems().insert(
+                part="snippet",
+                body={
+                    "snippet": {
+                        "playlistId": playlist_id,
+                        "resourceId": {
+                            "kind": "youtube#video",
+                            "videoId": video_id,
+                        },
+                    }
+                },
+            ).execute()
+            self.logger.info("playlist add success project_id=%s playlist_title=%s created=%s", project.name, playlist_title, created)
+            return {
+                "playlist_status": "added",
+                "playlist_id": playlist_id,
+                "playlist_title": playlist_title,
+                "playlist_created": created,
+                "playlist_error": "",
+            }
+        except Exception as exc:
+            safe_error = self._safe_error(str(exc))
+            self.logger.warning("playlist add failed project_id=%s playlist_title=%s error=%s", project.name, playlist_title, safe_error)
+            return {
+                "playlist_status": "failed",
+                "playlist_title": playlist_title,
+                "playlist_error": safe_error,
+            }
+
+    def _find_playlist_id(self, youtube, playlist_title: str) -> str:
+        page_token = None
+        while True:
+            kwargs = {"part": "snippet", "mine": True, "maxResults": 50}
+            if page_token:
+                kwargs["pageToken"] = page_token
+            response = youtube.playlists().list(**kwargs).execute()
+            items = response.get("items", []) if isinstance(response, dict) else []
+            for item in items:
+                snippet = item.get("snippet", {}) if isinstance(item, dict) else {}
+                if str(snippet.get("title") or "") == playlist_title:
+                    return str(item.get("id") or "")
+            page_token = response.get("nextPageToken") if isinstance(response, dict) else None
+            if not page_token:
+                return ""
+
+    def _create_playlist(self, youtube, playlist_title: str) -> str:
+        privacy = str(getattr(self.settings, "youtube_playlist_privacy_status", "private") or "private").strip()
+        if privacy not in VALID_PLAYLIST_PRIVACY_STATUSES:
+            privacy = "private"
+        response = youtube.playlists().insert(
+            part="snippet,status",
+            body={
+                "snippet": {"title": playlist_title},
+                "status": {"privacyStatus": privacy},
+            },
+        ).execute()
+        playlist_id = str(response.get("id") or "") if isinstance(response, dict) else ""
+        if not playlist_id:
+            raise YouTubeUploadError("YouTube playlist ID was not returned.", retryable=False)
+        return playlist_id
 
     def _set_upload_state(self, project: ProjectInfo, updates: dict[str, object]) -> None:
         metadata = dict(project.youtube_upload or {})

@@ -525,6 +525,23 @@ CSV蛻・梵邨先棡繧貞推蜍慕判繝励Ο繧ｸ繧ｧ繧ｯ繝医∈邏蝉
 - Windows Credential Manager繧貞茜逕ｨ縺励◆refresh token菫晏ｭ・- 蛻ｶ菴懊え繧｣繧ｶ繝ｼ繝峨↓譛蟆城剞縺ｮYouTube Upload UI繧定ｿｽ蜉
 - `logs/youtube.log` 縺ｮ蟆ら畑繝ｭ繧ｰ繧定ｿｽ蜉
 
+# Phase7 Quality Check（完了）
+
+## 目的
+
+動画生成後から投稿前に、公開してよい状態かを自動検査する品質ゲートを追加する。
+
+## 実装
+
+- Story / text / images / audio / video / publishing の品質検査
+- PASS / WARNING / ERROR の判定
+- `quality_check.json` への結果保存
+- Production Wizard の Quality Check タブ
+- YouTube / TikTok アップロード開始前の ERROR ガード
+- ffprobe 部分をmock可能にしたテスト
+
+---
+
 # Phase8（完了）
 ## 逶ｮ逧・
 

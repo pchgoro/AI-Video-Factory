@@ -1,5 +1,25 @@
 # AI Video Factory
 
+## Upload Defaults for YouTube / TikTok
+
+CosmicVideoFactory sets safer upload metadata automatically.
+
+YouTube uploads:
+
+- Upload privacy remains `private`.
+- The YouTube category ID defaults to `28` (`Science & Technology` / `科学と技術`).
+- The description automatically appends `音声はVOICEVOXを使用させていただいております。`.
+- The AI disclosure flag is sent as `containsSyntheticMedia=true`.
+- After upload, the video is added to a playlist whose title matches the Factory project category.
+- If that playlist does not exist, CosmicVideoFactory creates it as a private playlist by default.
+
+TikTok uploads:
+
+- The current Inbox Upload endpoint does not expose an `is_aigc` request field in TikTok's official Upload API schema.
+- Set the AI-generated content label manually in TikTok after opening the inbox upload.
+
+These YouTube defaults can be changed in Settings. YouTube playlist support requires a broader YouTube OAuth scope than upload-only access, so reconnect YouTube once if playlist creation/addition fails with a permission error.
+
 ## Public Website for TikTok Developer Portal
 
 A minimal static public website is available in `website/` for TikTok Developer
@@ -920,3 +940,31 @@ OpenAI API billing is separate from ChatGPT Plus. The app shows estimated cost b
 - `missing_openai_sdk`: run `python -m pip install -r requirements.txt`.
 - `provider_refusal` or `content_filter`: edit the theme/request and try again.
 - `structured_output_missing`: the model did not return data matching the schema; try again or select another model.
+
+## Quality Check / 品質検査
+
+Phase 7 adds a local quality gate between video rendering and upload.
+
+Use Production Wizard -> `Quality Check` -> `Run Quality Check` after `video/final.mp4` is created.
+
+The check result is saved to:
+
+```text
+projects/<project>/quality_check.json
+```
+
+Result levels:
+
+- `PASS`: ready to upload.
+- `WARNING`: upload is allowed, but review the items first.
+- `ERROR`: upload is blocked until fixed.
+
+Checked areas:
+
+- Story/text: title, script, voice text, subtitles, Story scene count, scene indices, narration, subtitle, image prompt.
+- Images: required `images/001.png` style files, readability, zero-byte files, consecutive duplicate images, small resolution warnings.
+- Audio: `audio/voice.wav`, ffprobe readability, duration, very short audio, long-silence warning hook.
+- Video: `video/final.mp4`, ffprobe readability, duration, width, height, fps, 9:16 orientation, 1080x1920 target, audio/video streams.
+- Publishing: required YouTube title, TikTok final video availability, duplicate YouTube/TikTok upload state warnings.
+
+YouTube and TikTok upload buttons run the quality gate again before starting upload. If the latest result has `ERROR`, the upload worker is not started. The check is local only; it does not call Gemini/OpenAI, Cloudflare, YouTube, TikTok, VOICEVOX, or FFmpeg rendering.

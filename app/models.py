@@ -97,6 +97,12 @@ class AppSettings:
     gemini_timeout_seconds: int = 60
     gemini_temperature: float = 0.7
     gemini_max_output_tokens: int = 4096
+    youtube_add_to_category_playlist: bool = True
+    youtube_create_playlist_if_missing: bool = True
+    youtube_playlist_privacy_status: str = "private"
+    youtube_voicevox_credit_enabled: bool = True
+    youtube_ai_disclosure_enabled: bool = True
+    youtube_category_id: str = "28"
     image_common_conditions: str = "・9:16\n・4K\n・文字なし\n・リアル\n・映画風\n・ドキュメンタリー風"
 
 

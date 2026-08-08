@@ -97,6 +97,12 @@ class SettingsService:
             gemini_timeout_seconds=int(data.get("gemini_timeout_seconds", 60)),
             gemini_temperature=float(data.get("gemini_temperature", 0.7)),
             gemini_max_output_tokens=int(data.get("gemini_max_output_tokens", 4096)),
+            youtube_add_to_category_playlist=bool(data.get("youtube_add_to_category_playlist", True)),
+            youtube_create_playlist_if_missing=bool(data.get("youtube_create_playlist_if_missing", True)),
+            youtube_playlist_privacy_status=str(data.get("youtube_playlist_privacy_status", "private")),
+            youtube_voicevox_credit_enabled=bool(data.get("youtube_voicevox_credit_enabled", True)),
+            youtube_ai_disclosure_enabled=bool(data.get("youtube_ai_disclosure_enabled", True)),
+            youtube_category_id=str(data.get("youtube_category_id", "28")),
             image_common_conditions=data.get(
                 "image_common_conditions",
                 "・9:16\n・4K\n・文字なし\n・リアル\n・映画風\n・ドキュメンタリー風",
